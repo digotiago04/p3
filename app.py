@@ -43,7 +43,6 @@ button[data-baseweb="tab"] { justify-content: center; }
 # HELPERS
 # ==========================================================
 def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120, max_h: int = 520) -> int:
-    """Altura dinâmica (sem linha extra)."""
     h = header_h + row_h * n_rows
     return max(min_h, min(max_h, h))
 
@@ -62,7 +61,6 @@ def _format_percent_br_from_any(x):
     if pd.isna(x):
         return ""
 
-    # numérico direto
     if isinstance(x, (int, float)):
         val = float(x)
         if abs(val) <= 1:
@@ -76,7 +74,6 @@ def _format_percent_br_from_any(x):
     has_pct = "%" in s
     s = s.replace("%", "").strip()
 
-    # normaliza pt-BR: remove milhar e troca vírgula por ponto
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
     try:
@@ -88,6 +85,14 @@ def _format_percent_br_from_any(x):
         val *= 100
 
     return f"{val:.2f}%".replace(".", ",")
+
+def _is_unnamed(colname: str) -> bool:
+    return str(colname).strip().upper().startswith("UNNAMED")
+
+def _has_month_year_token(v: str) -> bool:
+    # Ex.: MAIO/2025, JUN/2026, 05/2026
+    s = str(v).strip().upper()
+    return ("/" in s) and any(ch.isdigit() for ch in s)
 
 # ==========================================================
 # LOGIN
@@ -125,7 +130,6 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         header_idx = 2
         for idx, row in df_raw.head(20).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
-
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
@@ -143,7 +147,6 @@ def carregar_dados(sheet_id: str, refresh_token: int):
     # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
-
     try:
         data_val = raw.iloc[7, 28]  # AC8
         if isinstance(data_val, (pd.Timestamp, datetime.datetime, datetime.date)):
@@ -163,7 +166,6 @@ def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
         df_o = df[df["OCORRÊNCIAS"] == ocorrencia]
         if df_o.empty:
             continue
-
         d25 = df_o.iloc[:, 1::2].values.flatten()[:12]
         d26 = df_o.iloc[:, 2::2].values.flatten()[:12]
         df_p = pd.DataFrame({"2025": d25, "2026": d26}, index=MESES).fillna(0)
@@ -213,7 +215,6 @@ def grafico_mensal(df, mes, titulo_prefixo):
     if mes not in MESES:
         st.warning("Selecione um mês válido.")
         return
-
     idx = MESES.index(mes)
     d25 = df.iloc[:, 1::2].iloc[:, idx].fillna(0)
     d26 = df.iloc[:, 2::2].iloc[:, idx].fillna(0)
@@ -272,60 +273,97 @@ def detalhamento_por_mes(dfs, aba: str):
         st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
         with st.expander("Ver registros com DATA inválida"):
             df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
-
             if "DATA" in df_bad.columns:
                 def fmt_data(x):
                     if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
                         return x.strftime("%d/%m/%Y")
                     return "" if pd.isna(x) else str(x)
                 df_bad["DATA"] = df_invalid["DATA_ORIG"].apply(fmt_data).reset_index(drop=True)
-
             df_bad.insert(0, "ORDEM", range(1, len(df_bad) + 1))
             st.dataframe(df_bad, use_container_width=True, height=altura_df(len(df_bad)), hide_index=True)
 
     tabs = st.tabs([m.title() for m in MESES])
-
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
             dfm = df[df["MES_NUM"] == i].copy()
             if dfm.empty:
                 st.info("Sem registros neste mês.")
                 continue
-
             if "DATA" in colunas_presentes:
                 dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
-
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
             df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
             st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
 
 # ==========================================================
-# DETALHAMENTO GRUPO (Comparativo 2025x2026) + PORCENTAGEM 2 casas (pt-BR)
+# GRUPO: limpar "UNNAMED", remover linha None/MAIO/2025 etc e formatar porcentagem
 # ==========================================================
 def detalhamento_grupo(dfs):
     if ABA_GRUPO not in dfs:
         st.error("Aba 'GRUPO' não encontrada.")
         return
 
-    df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all")
-    df = df.dropna(how="all")
+    df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
+    df.columns = [str(c).strip().upper() for c in df.columns]
 
+    # 1) Se tiver UNNAMED, geralmente a primeira linha contém os nomes reais (MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS)
+    #    Vamos achar essa linha "header interna".
+    header_row_idx = None
+    for i in range(min(6, len(df))):
+        row = df.iloc[i].tolist()
+        row_str = [("" if pd.isna(x) else str(x).strip()) for x in row]
+        row_up = [s.upper() for s in row_str if s != ""]
+
+        has_pct = any("PORCENT" in s for s in row_up)
+        has_status = any("STATUS" == s for s in row_up)
+        has_months = sum(_has_month_year_token(s) for s in row_str) >= 1
+
+        if has_pct or has_status or has_months:
+            # linha candidata: normalmente é a primeira (i=0)
+            header_row_idx = i
+            break
+
+    if header_row_idx is not None:
+        header_vals = df.iloc[header_row_idx].tolist()
+        new_cols = list(df.columns)
+
+        for j, col in enumerate(new_cols):
+            hv = header_vals[j] if j < len(header_vals) else None
+            hv_str = "" if pd.isna(hv) else str(hv).strip().upper()
+
+            col_up = str(col).strip().upper()
+            col_is_periodo = col_up in ("PERÍODO", "PERIODO")
+            col_is_unnamed = _is_unnamed(col_up)
+
+            # se coluna é PERÍODO/UNNAMED, e hv tem nome útil, renomeia
+            if (col_is_periodo or col_is_unnamed) and hv_str not in ("", "NONE"):
+                new_cols[j] = hv_str
+
+        df.columns = new_cols
+
+        # remove linhas até e incluindo a linha de cabeçalho interno
+        df = df.iloc[header_row_idx + 1:].copy()
+
+    # 2) Remover linhas sem ocorrência (None/vazio) e cabeçalho duplicado
     if "OCORRÊNCIAS" in df.columns:
-        df = df[df["OCORRÊNCIAS"].astype(str).str.upper().ne("OCORRÊNCIAS")]
+        oc = df["OCORRÊNCIAS"].astype(str).str.strip()
+        df = df[oc.ne("") & oc.str.upper().ne("NONE") & oc.str.upper().ne("OCORRÊNCIAS")]
 
-    df_show = df.reset_index(drop=True)
+    # 3) Dropar colunas UNNAMED que ainda sobrarem
+    df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
 
-    # formatar coluna porcentagem (se existir)
+    # 4) Formatar PORCENTAGEM para 2 casas pt-BR
     col_pct = None
-    for c in df_show.columns:
+    for c in df.columns:
         cu = str(c).upper()
         if "PORCENT" in cu or "PERCENT" in cu:
             col_pct = c
             break
-
     if col_pct is not None:
-        df_show[col_pct] = df_show[col_pct].apply(_format_percent_br_from_any)
+        df[col_pct] = df[col_pct].apply(_format_percent_br_from_any)
 
+    # 5) ORDEM e exibição
+    df_show = df.reset_index(drop=True)
     df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
     st.dataframe(
@@ -357,7 +395,6 @@ def main():
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
-    # localidade
     st.write("")
     cL, cC, cR = st.columns([1, 2, 1])
     with cC:
@@ -375,7 +412,6 @@ def main():
 
     ocorrencias = df_loc["OCORRÊNCIAS"].dropna().drop_duplicates().astype(str).tolist()
 
-    # seleção por planilha
     if "sel_oc_by_sheet" not in st.session_state:
         st.session_state["sel_oc_by_sheet"] = {}
     if planilha not in st.session_state["sel_oc_by_sheet"]:
@@ -441,7 +477,6 @@ def main():
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]
-
     if aba_sel == ABA_GRUPO:
         st.markdown("<div class='center' style='font-weight:600;'>Comparativo 2025x2026 - GRUPO</div>", unsafe_allow_html=True)
         detalhamento_grupo(dfs)

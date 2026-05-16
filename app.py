@@ -6,9 +6,6 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
-# ==========================================================
-# CONFIG
-# ==========================================================
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"]
@@ -20,32 +17,44 @@ MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome da aba
 DATA_ABAS = ["CVLI", "TENTATIVA", "CVP"]
 
 # ==========================================================
-# ESTILO
+# ESTILO + CENTRALIZAÇÃO
 # ==========================================================
 st.set_page_config(page_title="Ferramenta para Análise de Ocorrências", layout="wide")
 
 st.markdown("""
 <style>
+/* títulos */
 .center-title {text-align:center; font-weight:700; font-size:28px; margin-top:0.25rem;}
 .center-sub   {text-align:center; font-weight:700; font-size:18px; margin-top:-0.25rem;}
 
+/* separador */
 hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
 
+/* checkbox */
 div[data-testid="stCheckbox"] label { font-size: 13px; }
+
+/* botões compactos */
 .stButton>button {padding: 0.35rem 0.9rem;}
+
+/* centralizar conteúdo geral de textos */
+.center {text-align:center;}
+
+/* CENTRALIZAR TABELAS (dataframe) */
+div[data-testid="stDataFrame"] * { text-align: center !important; }
+div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
+
+/* CENTRALIZAR TABS LABELS (quando possível) */
+button[data-baseweb="tab"] { justify-content: center; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================================
 # HELPERS
 # ==========================================================
-def _altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 140, max_h: int = 520) -> int:
-    """Altura dinâmica para evitar ‘espaço vazio’ quando há poucas linhas."""
-    h = header_h + row_h * (n_rows + 1)
+def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120, max_h: int = 520) -> int:
+    """Altura dinâmica (sem linha extra)."""
+    h = header_h + row_h * n_rows
     return max(min_h, min(max_h, h))
-
-def _safe_str(x):
-    return "" if pd.isna(x) else str(x)
 
 # ==========================================================
 # LOGIN
@@ -64,7 +73,6 @@ def login():
 # DOWNLOAD / LEITURA (XLSX)
 # ==========================================================
 def baixar_xlsx(sheet_id: str, cache_bust: int = 0) -> io.BytesIO:
-    # cb ajuda a evitar cache do export
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx&cb={cache_bust}"
     headers = {"Cache-Control": "no-cache", "Pragma": "no-cache", "User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=60)
@@ -85,7 +93,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         for idx, row in df_raw.head(15).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
 
-            # CVLI/TENTATIVA + planilhas de localidade
+            # CVLI/TENTATIVA + localidade
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
@@ -115,7 +123,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
     return dfs, data_atual
 
 # ==========================================================
-# GRÁFICOS (lógica do seu desktop)
+# GRÁFICOS (mantendo lógica do desktop)
 # ==========================================================
 def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
     for ocorrencia in selecionadas:
@@ -202,7 +210,6 @@ def detalhamento_por_mes(dfs, aba: str):
         return
 
     df = dfs[aba].copy()
-    # compatibilizações
     df.rename(columns={"ENDERECO": "LOCAL", "COP": "BOU"}, inplace=True)
 
     if aba.upper() == "CVP":
@@ -240,12 +247,13 @@ def detalhamento_por_mes(dfs, aba: str):
                 continue
 
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
-            df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))  # começa em 1
+            df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
             st.dataframe(
                 df_show,
                 use_container_width=True,
-                height=_altura_df(len(df_show))
+                height=altura_df(len(df_show)),
+                hide_index=True
             )
 
     # data indefinida
@@ -260,12 +268,13 @@ def detalhamento_por_mes(dfs, aba: str):
             return
 
         df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
-        df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))  # começa em 1
+        df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
         st.dataframe(
             df_show,
             use_container_width=True,
-            height=_altura_df(len(df_show))
+            height=altura_df(len(df_show)),
+            hide_index=True
         )
 
 # ==========================================================
@@ -278,13 +287,12 @@ def main():
     if "refresh_token" not in st.session_state:
         st.session_state["refresh_token"] = 0
 
-    # top bar: botão atualizar
+    # topo: botão atualizar
     top_left, top_right = st.columns([6, 1])
     with top_right:
         if st.button("🔄 Atualizar agora", use_container_width=True):
             st.session_state["refresh_token"] = int(time.time())
             st.cache_data.clear()
-            # opcional: limpa seleção após refresh (evita inconsistências)
             st.session_state.pop("sel_oc_by_sheet", None)
             st.rerun()
 
@@ -317,7 +325,6 @@ def main():
     if planilha not in st.session_state["sel_oc_by_sheet"]:
         st.session_state["sel_oc_by_sheet"][planilha] = set()
 
-    # checkboxes em 4 colunas
     st.write("")
     cols = st.columns(4)
     for i, oc in enumerate(ocorrencias):
@@ -334,8 +341,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # Gráfico Anual
-    st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
     b1, b2 = st.columns(2)
     with b1:
         if st.button("GRÁFICO POR OCORRÊNCIA", use_container_width=True):
@@ -349,8 +355,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # Gráfico Mensal
-    st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
         mes = st.selectbox(" ", MESES, label_visibility="collapsed")
@@ -359,8 +364,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # Dados
-    st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
     bb1, bb2, bb3 = st.columns(3)
     if "aba_dados" not in st.session_state:
         st.session_state["aba_dados"] = "CVLI"
@@ -376,10 +380,7 @@ def main():
             st.session_state["aba_dados"] = "CVP"
 
     st.write("")
-    st.markdown(
-        f"<div style='text-align:center; font-weight:600;'>Detalhamento - {st.session_state['aba_dados']}</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {st.session_state['aba_dados']}</div>", unsafe_allow_html=True)
     detalhamento_por_mes(dfs, st.session_state["aba_dados"])
 
     st.caption(f"Dados atualizados em: {data_atual}")

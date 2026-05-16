@@ -15,6 +15,12 @@ MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO",
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
 MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome real da aba
 
+# Abas “detalhamento”
+ABA_CVLI = "CVLI"
+ABA_TENT = "TENTATIVA"
+ABA_CVP  = "CVP"
+ABA_GRUPO = "GRUPO"  # comparativo 2025x2026
+
 # ==========================================================
 # ESTILO + CENTRALIZAÇÃO
 # ==========================================================
@@ -42,6 +48,14 @@ def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120
     """Altura dinâmica (sem linha extra)."""
     h = header_h + row_h * n_rows
     return max(min_h, min(max_h, h))
+
+def _limpar_data_series(s: pd.Series) -> pd.Series:
+    """Normaliza valores comuns inválidos para NaN antes do parse."""
+    s = s.astype(str).str.strip()
+    su = s.str.upper()
+    invalid = su.isin(["", "NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN"])
+    s = s.mask(invalid, None)
+    return s
 
 # ==========================================================
 # LOGIN
@@ -77,16 +91,21 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df_raw = xls.parse(sheet, header=None).dropna(axis=1, how="all")
 
         header_idx = 2
-        for idx, row in df_raw.head(15).iterrows():
+        for idx, row in df_raw.head(20).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
 
-            # localidade / CVLI / TENTATIVA
+            # localidade / CVLI / TENTATIVA / GRUPO (tende a ter "OCORRÊNCIAS")
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
 
             # CVP
             if ("TIPO" in vals) and ("DATA" in vals) and ("LOCAL" in vals):
+                header_idx = idx
+                break
+
+            # GRUPO: geralmente tem "PERÍODO" e "STATUS"
+            if ("PERÍODO" in vals) and ("STATUS" in vals):
                 header_idx = idx
                 break
 
@@ -110,7 +129,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
     return dfs, data_atual
 
 # ==========================================================
-# GRÁFICOS
+# GRÁFICOS (mantendo lógica do desktop)
 # ==========================================================
 def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
     for ocorrencia in selecionadas:
@@ -189,7 +208,7 @@ def grafico_mensal(df, mes, titulo_prefixo):
         st.pyplot(fig, use_container_width=True)
 
 # ==========================================================
-# DETALHAMENTO (CVLI/TENTATIVA/CVP) por mês + ALERTA (sem aba "Data indefinida")
+# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP) + ALERTA (sem aba Data indefinida)
 # ==========================================================
 def detalhamento_por_mes(dfs, aba: str):
     if aba not in dfs:
@@ -208,15 +227,10 @@ def detalhamento_por_mes(dfs, aba: str):
 
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
-    # --- DATA: guarda original e tenta converter ---
+    # DATA parse robusto (com DATA_ORIG)
     if "DATA" in df.columns:
         df["DATA_ORIG"] = df["DATA"]
-
-        s = df["DATA_ORIG"].astype(str).str.strip()
-        # normaliza strings comuns inválidas
-        s_upper = s.str.upper()
-        s = s.where(~s_upper.isin(["", "NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN"]), other=None)
-
+        s = _limpar_data_series(df["DATA_ORIG"])
         df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
         df["MES_NUM"] = df["DATA_DT"].dt.month
     else:
@@ -227,14 +241,14 @@ def detalhamento_por_mes(dfs, aba: str):
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
 
-    # --- ALERTA: inválida = DATA_DT NaT ---
+    # ALERTA: inválida = DATA_DT NaT
     df_invalid = df[df["DATA_DT"].isna()].copy()
     if not df_invalid.empty:
         st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
         with st.expander("Ver registros com DATA inválida"):
             df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
 
-            # DATA original (não formatada como timestamp)
+            # DATA original legível
             if "DATA" in df_bad.columns:
                 def fmt_data(x):
                     if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
@@ -245,7 +259,6 @@ def detalhamento_por_mes(dfs, aba: str):
             df_bad.insert(0, "ORDEM", range(1, len(df_bad) + 1))
             st.dataframe(df_bad, use_container_width=True, height=altura_df(len(df_bad)), hide_index=True)
 
-    # --- TABS apenas Jan..Dez ---
     tabs = st.tabs([m.title() for m in MESES])
 
     for i, m in enumerate(MESES, start=1):
@@ -263,6 +276,32 @@ def detalhamento_por_mes(dfs, aba: str):
             df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
             st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
+
+# ==========================================================
+# DETALHAMENTO GRUPO (Comparativo 2025x2026)
+# ==========================================================
+def detalhamento_grupo(dfs):
+    if ABA_GRUPO not in dfs:
+        st.error("Aba 'GRUPO' não encontrada.")
+        return
+
+    df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all")
+    df = df.dropna(how="all")
+
+    # remove linhas “header duplicado” se existirem
+    # (ex.: se a primeira coluna contiver o próprio nome "OCORRÊNCIAS" em linhas)
+    if "OCORRÊNCIAS" in df.columns:
+        df = df[df["OCORRÊNCIAS"].astype(str).str.upper().ne("OCORRÊNCIAS")]
+
+    df_show = df.reset_index(drop=True)
+    df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
+
+    st.dataframe(
+        df_show,
+        use_container_width=True,
+        height=altura_df(len(df_show), max_h=650),
+        hide_index=True
+    )
 
 # ==========================================================
 # APP
@@ -352,23 +391,32 @@ def main():
     st.markdown("<hr/>", unsafe_allow_html=True)
 
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
-    bb1, bb2, bb3 = st.columns(3)
-    if "aba_dados" not in st.session_state:
-        st.session_state["aba_dados"] = "CVLI"
 
+    if "aba_dados" not in st.session_state:
+        st.session_state["aba_dados"] = ABA_CVLI
+
+    bb1, bb2, bb3, bb4 = st.columns(4)
     with bb1:
         if st.button("CVLI", use_container_width=True):
-            st.session_state["aba_dados"] = "CVLI"
+            st.session_state["aba_dados"] = ABA_CVLI
     with bb2:
         if st.button("TENTATIVA", use_container_width=True):
-            st.session_state["aba_dados"] = "TENTATIVA"
+            st.session_state["aba_dados"] = ABA_TENT
     with bb3:
         if st.button("CVP", use_container_width=True):
-            st.session_state["aba_dados"] = "CVP"
+            st.session_state["aba_dados"] = ABA_CVP
+    with bb4:
+        if st.button("Comparativo 2025x2026", use_container_width=True):
+            st.session_state["aba_dados"] = ABA_GRUPO
 
     st.write("")
-    st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {st.session_state['aba_dados']}</div>", unsafe_allow_html=True)
-    detalhamento_por_mes(dfs, st.session_state["aba_dados"])
+    aba_sel = st.session_state["aba_dados"]
+    if aba_sel == ABA_GRUPO:
+        st.markdown("<div class='center' style='font-weight:600;'>Comparativo 2025x2026 - GRUPO</div>", unsafe_allow_html=True)
+        detalhamento_grupo(dfs)
+    else:
+        st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
+        detalhamento_por_mes(dfs, aba_sel)
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

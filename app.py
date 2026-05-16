@@ -6,15 +6,14 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
+# ==========================================================
+# CONFIG
+# ==========================================================
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"]
-MESES_PT = {1:"JANEIRO",2:"FEVEREIRO",3:"MARÇO",4:"ABRIL",5:"MAIO",6:"JUNHO",7:"JULHO",8:"AGOSTO",9:"SETEMBRO",10:"OUTUBRO",11:"NOVEMBRO",12:"DEZEMBRO",99:"DATA INDEFINIDA"}
-
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
 MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome da aba
-
-DATA_ABAS = ["CVLI", "TENTATIVA", "CVP"]
 
 # ==========================================================
 # ESTILO + CENTRALIZAÇÃO
@@ -23,27 +22,15 @@ st.set_page_config(page_title="Ferramenta para Análise de Ocorrências", layout
 
 st.markdown("""
 <style>
-/* títulos */
 .center-title {text-align:center; font-weight:700; font-size:28px; margin-top:0.25rem;}
 .center-sub   {text-align:center; font-weight:700; font-size:18px; margin-top:-0.25rem;}
-
-/* separador */
-hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
-
-/* checkbox */
-div[data-testid="stCheckbox"] label { font-size: 13px; }
-
-/* botões compactos */
-.stButton>button {padding: 0.35rem 0.9rem;}
-
-/* centralizar conteúdo geral de textos */
 .center {text-align:center;}
-
-/* CENTRALIZAR TABELAS (dataframe) */
+hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
+div[data-testid="stCheckbox"] label { font-size: 13px; }
+.stButton>button {padding: 0.35rem 0.9rem;}
+/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
-
-/* CENTRALIZAR TABS LABELS (quando possível) */
 button[data-baseweb="tab"] { justify-content: center; }
 </style>
 """, unsafe_allow_html=True)
@@ -55,6 +42,12 @@ def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120
     """Altura dinâmica (sem linha extra)."""
     h = header_h + row_h * n_rows
     return max(min_h, min(max_h, h))
+
+def limpar_data_raw(s: pd.Series) -> pd.Series:
+    """Normaliza valores comuns inválidos para NaN antes do parse."""
+    s = s.astype(str).str.strip()
+    s = s.replace({"": None, "NI": None, "N/I": None, "N\\I": None, "-": None, "NÃO INFORMADO": None, "NA": None})
+    return s
 
 # ==========================================================
 # LOGIN
@@ -93,7 +86,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         for idx, row in df_raw.head(15).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
 
-            # CVLI/TENTATIVA + localidade
+            # localidade / CVLI / TENTATIVA
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
@@ -123,7 +116,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
     return dfs, data_atual
 
 # ==========================================================
-# GRÁFICOS (mantendo lógica do desktop)
+# GRÁFICOS
 # ==========================================================
 def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
     for ocorrencia in selecionadas:
@@ -202,7 +195,7 @@ def grafico_mensal(df, mes, titulo_prefixo):
         st.pyplot(fig, use_container_width=True)
 
 # ==========================================================
-# DETALHAMENTO (CVLI/TENTATIVA/CVP) por mês
+# DETALHAMENTO (CVLI/TENTATIVA/CVP) por mês + ALERTA (sem aba "Data indefinida")
 # ==========================================================
 def detalhamento_por_mes(dfs, aba: str):
     if aba not in dfs:
@@ -221,24 +214,38 @@ def detalhamento_por_mes(dfs, aba: str):
 
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
+    # DATA -> month
     if "DATA" in df.columns:
-        df["DATA_DT"] = pd.to_datetime(df["DATA"], errors="coerce", dayfirst=True)
-        df["MES_NUM"] = df["DATA_DT"].dt.month.fillna(99).astype(int)
-        df = df.sort_values(by=["MES_NUM", "DATA_DT"], na_position="last")
+        df["DATA_CLEAN"] = limpar_data_raw(df["DATA"])
+        df["DATA_DT"] = pd.to_datetime(df["DATA_CLEAN"], errors="coerce", dayfirst=True)
+        df["MES_NUM"] = df["DATA_DT"].dt.month
     else:
         df["DATA_DT"] = pd.NaT
-        df["MES_NUM"] = 99
+        df["MES_NUM"] = pd.NA
 
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
 
-    tabs = st.tabs([m.title() for m in MESES] + ["Data indefinida"])
+    # ALERTA (sem aba extra)
+    df_invalid = df[df["MES_NUM"].isna()].copy()
+    if not df_invalid.empty:
+        st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
+        with st.expander("Ver registros com DATA inválida"):
+            df_bad = df_invalid.copy()
+            if "DATA_DT" in df_bad.columns and "DATA" in colunas_presentes:
+                # mantém a coluna DATA como texto original
+                pass
+            df_bad_show = df_bad[colunas_presentes].copy().reset_index(drop=True)
+            df_bad_show.insert(0, "ORDEM", range(1, len(df_bad_show) + 1))
+            st.dataframe(df_bad_show, use_container_width=True, height=altura_df(len(df_bad_show)), hide_index=True)
 
-    # meses 1..12
+    tabs = st.tabs([m.title() for m in MESES])
+
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
             dfm = df[df["MES_NUM"] == i].copy()
 
+            # DATA formatada
             if "DATA_DT" in dfm.columns and "DATA" in colunas_presentes:
                 dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
 
@@ -256,27 +263,6 @@ def detalhamento_por_mes(dfs, aba: str):
                 hide_index=True
             )
 
-    # data indefinida
-    with tabs[-1]:
-        dfm = df[df["MES_NUM"] == 99].copy()
-
-        if "DATA_DT" in dfm.columns and "DATA" in colunas_presentes:
-            dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
-
-        if dfm.empty:
-            st.info("Sem registros com data indefinida.")
-            return
-
-        df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
-        df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
-
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            height=altura_df(len(df_show)),
-            hide_index=True
-        )
-
 # ==========================================================
 # APP
 # ==========================================================
@@ -287,7 +273,6 @@ def main():
     if "refresh_token" not in st.session_state:
         st.session_state["refresh_token"] = 0
 
-    # topo: botão atualizar
     top_left, top_right = st.columns([6, 1])
     with top_right:
         if st.button("🔄 Atualizar agora", use_container_width=True):
@@ -325,6 +310,7 @@ def main():
     if planilha not in st.session_state["sel_oc_by_sheet"]:
         st.session_state["sel_oc_by_sheet"][planilha] = set()
 
+    # checkboxes em 4 colunas
     st.write("")
     cols = st.columns(4)
     for i, oc in enumerate(ocorrencias):

@@ -15,10 +15,9 @@ MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO",
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
 MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome real da aba
 
-# Abas “detalhamento”
 ABA_CVLI = "CVLI"
 ABA_TENT = "TENTATIVA"
-ABA_CVP  = "CVP"
+ABA_CVP = "CVP"
 ABA_GRUPO = "GRUPO"  # comparativo 2025x2026
 
 # ==========================================================
@@ -34,7 +33,6 @@ st.markdown("""
 hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
 div[data-testid="stCheckbox"] label { font-size: 13px; }
 .stButton>button {padding: 0.35rem 0.9rem;}
-/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
 button[data-baseweb="tab"] { justify-content: center; }
@@ -50,12 +48,46 @@ def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120
     return max(min_h, min(max_h, h))
 
 def _limpar_data_series(s: pd.Series) -> pd.Series:
-    """Normaliza valores comuns inválidos para NaN antes do parse."""
     s = s.astype(str).str.strip()
     su = s.str.upper()
     invalid = su.isin(["", "NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN"])
-    s = s.mask(invalid, None)
-    return s
+    return s.mask(invalid, None)
+
+def _format_percent_br_from_any(x):
+    """
+    Formata para pt-BR com 2 casas e %:
+    exemplos: 80,50% ; 7,55%
+    Aceita: "-40,00%", "-40,00", "-40", -40, -0.4, 0.0755 etc.
+    """
+    if pd.isna(x):
+        return ""
+
+    # numérico direto
+    if isinstance(x, (int, float)):
+        val = float(x)
+        if abs(val) <= 1:
+            val *= 100
+        return f"{val:.2f}%".replace(".", ",")
+
+    s = str(x).strip()
+    if s == "":
+        return ""
+
+    has_pct = "%" in s
+    s = s.replace("%", "").strip()
+
+    # normaliza pt-BR: remove milhar e troca vírgula por ponto
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        val = float(s)
+    except Exception:
+        return ""
+
+    if (not has_pct) and abs(val) <= 1:
+        val *= 100
+
+    return f"{val:.2f}%".replace(".", ",")
 
 # ==========================================================
 # LOGIN
@@ -94,17 +126,12 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         for idx, row in df_raw.head(20).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
 
-            # localidade / CVLI / TENTATIVA / GRUPO (tende a ter "OCORRÊNCIAS")
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
-
-            # CVP
             if ("TIPO" in vals) and ("DATA" in vals) and ("LOCAL" in vals):
                 header_idx = idx
                 break
-
-            # GRUPO: geralmente tem "PERÍODO" e "STATUS"
             if ("PERÍODO" in vals) and ("STATUS" in vals):
                 header_idx = idx
                 break
@@ -113,7 +140,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
-    # Data de atualização (AC8) – tenta 1ª CPM-I
+    # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
 
@@ -129,7 +156,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
     return dfs, data_atual
 
 # ==========================================================
-# GRÁFICOS (mantendo lógica do desktop)
+# GRÁFICOS
 # ==========================================================
 def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
     for ocorrencia in selecionadas:
@@ -227,7 +254,6 @@ def detalhamento_por_mes(dfs, aba: str):
 
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
-    # DATA parse robusto (com DATA_ORIG)
     if "DATA" in df.columns:
         df["DATA_ORIG"] = df["DATA"]
         s = _limpar_data_series(df["DATA_ORIG"])
@@ -241,14 +267,12 @@ def detalhamento_por_mes(dfs, aba: str):
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
 
-    # ALERTA: inválida = DATA_DT NaT
     df_invalid = df[df["DATA_DT"].isna()].copy()
     if not df_invalid.empty:
         st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
         with st.expander("Ver registros com DATA inválida"):
             df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
 
-            # DATA original legível
             if "DATA" in df_bad.columns:
                 def fmt_data(x):
                     if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
@@ -264,7 +288,6 @@ def detalhamento_por_mes(dfs, aba: str):
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
             dfm = df[df["MES_NUM"] == i].copy()
-
             if dfm.empty:
                 st.info("Sem registros neste mês.")
                 continue
@@ -274,11 +297,10 @@ def detalhamento_por_mes(dfs, aba: str):
 
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
             df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
-
             st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
 
 # ==========================================================
-# DETALHAMENTO GRUPO (Comparativo 2025x2026)
+# DETALHAMENTO GRUPO (Comparativo 2025x2026) + PORCENTAGEM 2 casas (pt-BR)
 # ==========================================================
 def detalhamento_grupo(dfs):
     if ABA_GRUPO not in dfs:
@@ -288,12 +310,22 @@ def detalhamento_grupo(dfs):
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all")
     df = df.dropna(how="all")
 
-    # remove linhas “header duplicado” se existirem
-    # (ex.: se a primeira coluna contiver o próprio nome "OCORRÊNCIAS" em linhas)
     if "OCORRÊNCIAS" in df.columns:
         df = df[df["OCORRÊNCIAS"].astype(str).str.upper().ne("OCORRÊNCIAS")]
 
     df_show = df.reset_index(drop=True)
+
+    # formatar coluna porcentagem (se existir)
+    col_pct = None
+    for c in df_show.columns:
+        cu = str(c).upper()
+        if "PORCENT" in cu or "PERCENT" in cu:
+            col_pct = c
+            break
+
+    if col_pct is not None:
+        df_show[col_pct] = df_show[col_pct].apply(_format_percent_br_from_any)
+
     df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
     st.dataframe(
@@ -309,7 +341,6 @@ def detalhamento_grupo(dfs):
 def main():
     login()
 
-    # refresh token para forçar atualização
     if "refresh_token" not in st.session_state:
         st.session_state["refresh_token"] = 0
 
@@ -326,7 +357,7 @@ def main():
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
-    # localidade central
+    # localidade
     st.write("")
     cL, cC, cR = st.columns([1, 2, 1])
     with cC:
@@ -350,7 +381,6 @@ def main():
     if planilha not in st.session_state["sel_oc_by_sheet"]:
         st.session_state["sel_oc_by_sheet"][planilha] = set()
 
-    # checkboxes em 4 colunas
     st.write("")
     cols = st.columns(4)
     for i, oc in enumerate(ocorrencias):
@@ -411,6 +441,7 @@ def main():
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]
+
     if aba_sel == ABA_GRUPO:
         st.markdown("<div class='center' style='font-weight:600;'>Comparativo 2025x2026 - GRUPO</div>", unsafe_allow_html=True)
         detalhamento_grupo(dfs)

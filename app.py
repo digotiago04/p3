@@ -1,4 +1,5 @@
 import io
+import time
 import datetime
 import requests
 import pandas as pd
@@ -8,57 +9,52 @@ import matplotlib.pyplot as plt
 # ==========================================================
 # CONFIG
 # ==========================================================
-SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"  # do seu link
+SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"]
 MESES_PT = {1:"JANEIRO",2:"FEVEREIRO",3:"MARÇO",4:"ABRIL",5:"MAIO",6:"JUNHO",7:"JULHO",8:"AGOSTO",9:"SETEMBRO",10:"OUTUBRO",11:"NOVEMBRO",12:"DEZEMBRO",99:"DATA INDEFINIDA"}
 
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
-MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}
-
-DATA_ABAS = ["CVLI", "TENTATIVA", "CVP"]
-
+MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # mapeamento do nome exibido para o nome real da aba
 
 # ==========================================================
-# ESTILO (aproxima o visual do Tkinter)
+# ESTILO
 # ==========================================================
-st.set_page_config(page_title="Ferramenta para Análise de Ocorrências", layout="centered")
+st.set_page_config(page_title="Ferramenta para Análise de Ocorrências", layout="wide")
 
 st.markdown("""
 <style>
-/* centraliza títulos */
 .center-title {text-align:center; font-weight:700; font-size:28px; margin-top:0.25rem;}
 .center-sub   {text-align:center; font-weight:700; font-size:18px; margin-top:-0.25rem;}
 
-/* “separadores” mais parecidos com linhas */
 hr {
   border: none;
   border-top: 1px solid #cfcfcf;
   margin: 1.2rem 0;
 }
 
-/* deixa label de checkbox mais “Tkinter” */
 div[data-testid="stCheckbox"] label {
   font-size: 13px;
 }
 
-/* botões um pouco mais compactos */
 .stButton>button {padding: 0.35rem 0.9rem;}
 </style>
 """, unsafe_allow_html=True)
 
-
 # ==========================================================
-# DOWNLOAD / LEITURA (mesma ideia de detecção de cabeçalho)
+# DOWNLOAD / LEITURA
 # ==========================================================
-def baixar_xlsx(sheet_id: str) -> io.BytesIO:
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
+def baixar_xlsx(sheet_id: str, cache_bust: int = 0) -> io.BytesIO:
+    # cache_bust (cb) ajuda a evitar cache do Google/export
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx&cb={cache_bust}"
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    r = requests.get(url, headers=headers, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(f"Falha ao baixar XLSX. Status={r.status_code}.")
     return io.BytesIO(r.content)
 
 @st.cache_data(ttl=300)
-def carregar_dados(sheet_id: str):
-    arquivo = baixar_xlsx(sheet_id)
+def carregar_dados(sheet_id: str, refresh_token: int):
+    arquivo = baixar_xlsx(sheet_id, cache_bust=refresh_token)
     xls = pd.ExcelFile(arquivo, engine="openpyxl")
 
     dfs = {}
@@ -69,12 +65,12 @@ def carregar_dados(sheet_id: str):
         for idx, row in df_raw.head(15).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
 
-            # padrão antigo (CVLI/TENTATIVA e planilhas de localidade)
+            # padrão (CVLI/TENTATIVA e planilhas de localidade)
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
                 break
 
-            # padrão do CVP
+            # padrão CVP
             if ("TIPO" in vals) and ("DATA" in vals) and ("LOCAL" in vals):
                 header_idx = idx
                 break
@@ -83,7 +79,7 @@ def carregar_dados(sheet_id: str):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
-    # data de atualização (AC8) e senha (se você quiser usar da planilha; aqui usamos só data)
+    # Data de atualização (AC8) - tenta 1ª CPM-I
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
 
@@ -98,9 +94,8 @@ def carregar_dados(sheet_id: str):
 
     return dfs, data_atual
 
-
 # ==========================================================
-# LOGIN (senha do Streamlit Secrets)
+# LOGIN
 # ==========================================================
 def login():
     if st.session_state.get("auth"):
@@ -111,7 +106,6 @@ def login():
         st.session_state["auth"] = True
         st.rerun()
     st.stop()
-
 
 # ==========================================================
 # GRÁFICOS (mantendo lógica do seu desktop)
@@ -126,13 +120,13 @@ def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
         df_p = pd.DataFrame({"2025": d25, "2026": d26}, index=MESES).fillna(0)
         df_p.loc["TOTAL"] = df_p.sum()
 
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(9, 5))
         ax = df_p.plot(kind="bar", ax=plt.gca(), title=f"{ocorrencia} - {titulo_prefixo}")
         for c in ax.containers:
             ax.bar_label(c, fmt="%.0f")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=True)
 
 def grafico_anual_totais(df, titulo_prefixo):
     def _total(linha, cols):
@@ -154,13 +148,13 @@ def grafico_anual_totais(df, titulo_prefixo):
     for d, t in [(df_t[m_dr], "DROGAS"), (df_t[m_ot], "OUTRAS")]:
         if d.empty:
             continue
-        fig = plt.figure(figsize=(12, 6))
+        fig = plt.figure(figsize=(10, 5))
         ax = d.set_index("OC")[["2025","2026"]].plot(kind="bar", ax=plt.gca(), title=f"{t} - {titulo_prefixo}")
         for c in ax.containers:
             ax.bar_label(c, fmt="%.0f")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=True)
 
 def grafico_mensal(df, mes, titulo_prefixo):
     mes = mes.upper()
@@ -180,14 +174,13 @@ def grafico_mensal(df, mes, titulo_prefixo):
     for d, t in [(df_m[m_dr], "Drogas"), (df_m[m_ot], "Outras")]:
         if d.empty:
             continue
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(9, 5))
         ax = d.set_index("OC")[["2025","2026"]].plot(kind="bar", ax=plt.gca(), title=f"{t} - {mes} - {titulo_prefixo}")
         for c in ax.containers:
             ax.bar_label(c, fmt="%.0f")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        st.pyplot(fig)
-
+        st.pyplot(fig, use_container_width=True)
 
 # ==========================================================
 # DETALHAMENTO (CVLI/TENTATIVA/CVP) por mês em tabs
@@ -229,7 +222,7 @@ def detalhamento_por_mes(dfs, aba: str):
             if dfm.empty:
                 st.info("Sem registros neste mês.")
             else:
-                st.dataframe(dfm[colunas_presentes], use_container_width=True)
+                st.dataframe(dfm[colunas_presentes], use_container_width=True, height=520)
 
     with tabs[-1]:
         dfm = df[df["MES_NUM"] == 99].copy()
@@ -238,8 +231,7 @@ def detalhamento_por_mes(dfs, aba: str):
         if dfm.empty:
             st.info("Sem registros com data indefinida.")
         else:
-            st.dataframe(dfm[colunas_presentes], use_container_width=True)
-
+            st.dataframe(dfm[colunas_presentes], use_container_width=True, height=520)
 
 # ==========================================================
 # APP
@@ -247,12 +239,26 @@ def detalhamento_por_mes(dfs, aba: str):
 def main():
     login()
 
-    dfs, data_atual = carregar_dados(SHEET_ID)
+    # token de atualização manual
+    if "refresh_token" not in st.session_state:
+        st.session_state["refresh_token"] = 0
+
+    # Botão de atualizar (força recarregar planilha imediatamente)
+    top_left, top_right = st.columns([6, 1])
+    with top_right:
+        if st.button("🔄 Atualizar agora", use_container_width=True):
+            st.session_state["refresh_token"] = int(time.time())
+            st.cache_data.clear()
+            # opcional: limpa seleção de ocorrências na sessão após refresh
+            st.session_state.pop("sel_oc", None)
+            st.rerun()
+
+    dfs, data_atual = carregar_dados(SHEET_ID, st.session_state["refresh_token"])
 
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
-    # Linha: label + selectbox centralizado (aproxima)
+    # Localidade centralizada
     st.write("")
     cL, cC, cR = st.columns([1,2,1])
     with cC:
@@ -270,11 +276,9 @@ def main():
 
     ocorrencias = df_loc["OCORRÊNCIAS"].dropna().drop_duplicates().astype(str).tolist()
 
-    # === CHECKBOXES em colunas (estilo Tkinter) ===
-    # (na imagem são 4 colunas; aqui usamos 4 colunas e distribuímos em linhas)
+    # Checkboxes em 4 colunas
     st.write("")
     cols = st.columns(4)
-    # recupera/define estado
     if "sel_oc" not in st.session_state:
         st.session_state["sel_oc"] = set()
 
@@ -292,7 +296,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # === Gráfico Anual: 2025 vs 2026 ===
+    # Gráfico Anual
     st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
     b1, b2 = st.columns(2)
     with b1:
@@ -307,7 +311,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # === Gráfico Mensal ===
+    # Gráfico Mensal
     st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1,1,1])
     with c2:
@@ -317,7 +321,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # === Dados das ocorrências (botões como no desktop) ===
+    # Dados
     st.markdown("<div style='text-align:center; font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
     bb1, bb2, bb3 = st.columns(3)
     if "aba_dados" not in st.session_state:

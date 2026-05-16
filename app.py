@@ -13,7 +13,7 @@ SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"]
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
-MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome da aba
+MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome real da aba
 
 # ==========================================================
 # ESTILO + CENTRALIZAÇÃO
@@ -42,12 +42,6 @@ def altura_df(n_rows: int, row_h: int = 35, header_h: int = 42, min_h: int = 120
     """Altura dinâmica (sem linha extra)."""
     h = header_h + row_h * n_rows
     return max(min_h, min(max_h, h))
-
-def limpar_data_raw(s: pd.Series) -> pd.Series:
-    """Normaliza valores comuns inválidos para NaN antes do parse."""
-    s = s.astype(str).str.strip()
-    s = s.replace({"": None, "NI": None, "N/I": None, "N\\I": None, "-": None, "NÃO INFORMADO": None, "NA": None})
-    return s
 
 # ==========================================================
 # LOGIN
@@ -214,54 +208,61 @@ def detalhamento_por_mes(dfs, aba: str):
 
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
-    # DATA -> month
+    # --- DATA: guarda original e tenta converter ---
     if "DATA" in df.columns:
-        df["DATA_CLEAN"] = limpar_data_raw(df["DATA"])
-        df["DATA_DT"] = pd.to_datetime(df["DATA_CLEAN"], errors="coerce", dayfirst=True)
+        df["DATA_ORIG"] = df["DATA"]
+
+        s = df["DATA_ORIG"].astype(str).str.strip()
+        # normaliza strings comuns inválidas
+        s_upper = s.str.upper()
+        s = s.where(~s_upper.isin(["", "NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN"]), other=None)
+
+        df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
         df["MES_NUM"] = df["DATA_DT"].dt.month
     else:
+        df["DATA_ORIG"] = None
         df["DATA_DT"] = pd.NaT
         df["MES_NUM"] = pd.NA
 
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
 
-    # ALERTA (sem aba extra)
-    df_invalid = df[df["MES_NUM"].isna()].copy()
+    # --- ALERTA: inválida = DATA_DT NaT ---
+    df_invalid = df[df["DATA_DT"].isna()].copy()
     if not df_invalid.empty:
         st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
         with st.expander("Ver registros com DATA inválida"):
-            df_bad = df_invalid.copy()
-            if "DATA_DT" in df_bad.columns and "DATA" in colunas_presentes:
-                # mantém a coluna DATA como texto original
-                pass
-            df_bad_show = df_bad[colunas_presentes].copy().reset_index(drop=True)
-            df_bad_show.insert(0, "ORDEM", range(1, len(df_bad_show) + 1))
-            st.dataframe(df_bad_show, use_container_width=True, height=altura_df(len(df_bad_show)), hide_index=True)
+            df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
 
+            # DATA original (não formatada como timestamp)
+            if "DATA" in df_bad.columns:
+                def fmt_data(x):
+                    if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
+                        return x.strftime("%d/%m/%Y")
+                    return "" if pd.isna(x) else str(x)
+                df_bad["DATA"] = df_invalid["DATA_ORIG"].apply(fmt_data).reset_index(drop=True)
+
+            df_bad.insert(0, "ORDEM", range(1, len(df_bad) + 1))
+            st.dataframe(df_bad, use_container_width=True, height=altura_df(len(df_bad)), hide_index=True)
+
+    # --- TABS apenas Jan..Dez ---
     tabs = st.tabs([m.title() for m in MESES])
 
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
             dfm = df[df["MES_NUM"] == i].copy()
 
-            # DATA formatada
-            if "DATA_DT" in dfm.columns and "DATA" in colunas_presentes:
-                dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
-
             if dfm.empty:
                 st.info("Sem registros neste mês.")
                 continue
 
+            if "DATA" in colunas_presentes:
+                dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
+
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
             df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
-            st.dataframe(
-                df_show,
-                use_container_width=True,
-                height=altura_df(len(df_show)),
-                hide_index=True
-            )
+            st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
 
 # ==========================================================
 # APP

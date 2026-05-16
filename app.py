@@ -3,8 +3,12 @@ import pandas as pd
 import requests
 import io
 import datetime
-
+import re, streamlit as st
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
+SHEET_URL = st.secrets["SHEET_URL"]
+SHEET_ID = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", SHEET_URL).group(1)
+
+
 
 def baixar_xlsx(sheet_id: str) -> io.BytesIO:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"

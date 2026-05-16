@@ -4,7 +4,7 @@ import requests
 import io
 import datetime
 
-SHEET_ID = "https://docs.google.com/spreadsheets/d/1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc/edit?pli=1&gid=0#gid=0"
+SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 def baixar_xlsx(sheet_id: str) -> io.BytesIO:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"

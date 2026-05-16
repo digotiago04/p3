@@ -9,7 +9,8 @@ SHEET_ID = "SEU_ID_AQUI"
 def baixar_xlsx(sheet_id: str) -> io.BytesIO:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     r = requests.get(url, timeout=60)
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(f"Falha ao baixar XLSX. Status={r.status_code}. Resposta curta={r.text[:200]}")
     return io.BytesIO(r.content)
 
 @st.cache_data(ttl=300)

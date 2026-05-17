@@ -35,10 +35,12 @@ hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
 
 div[data-testid="stCheckbox"] label { font-size: 13px; }
 
+/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
 button[data-baseweb="tab"] { justify-content: center; }
 
+/* botões */
 .stButton>button {padding: 0.35rem 0.9rem;}
 div.stButton > button {
   white-space: pre-line;
@@ -108,20 +110,15 @@ def _mes_para_nome_pt(token_mes: str) -> str:
         "JAN":"JANEIRO","FEV":"FEVEREIRO","MAR":"MARÇO","ABR":"ABRIL","MAI":"MAIO","JUN":"JUNHO",
         "JUL":"JULHO","AGO":"AGOSTO","SET":"SETEMBRO","OUT":"OUTUBRO","NOV":"NOVEMBRO","DEZ":"DEZEMBRO"
     }
-
     t = str(token_mes).strip()
     if t.isdigit():
-        n = int(t)
-        return nomes.get(n, "MÊS")
-
+        return nomes.get(int(t), "MÊS")
     t2 = _remove_acentos_upper(t)
     if t2[:3] in abrev:
         return abrev[t2[:3]]
-
     for k, v in abrev.items():
         if t2.startswith(k):
             return v
-
     return t.upper()
 
 def detectar_mes_grupo(dfs) -> str:
@@ -130,9 +127,7 @@ def detectar_mes_grupo(dfs) -> str:
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     if df.empty:
         return "MÊS"
-
     pattern = re.compile(r"^\s*([A-Za-zÀ-ÿ]{3,}|0?[1-9]|1[0-2])\s*/\s*20(25|26)\s*$")
-
     for i in range(min(6, len(df))):
         for cell in df.iloc[i].tolist():
             if pd.isna(cell):
@@ -141,13 +136,11 @@ def detectar_mes_grupo(dfs) -> str:
             m = pattern.match(s)
             if m:
                 return _mes_para_nome_pt(m.group(1))
-
     for c in df.columns:
         s = str(c).strip()
         m = pattern.match(s)
         if m:
             return _mes_para_nome_pt(m.group(1))
-
     return "MÊS"
 
 # ==========================================================
@@ -306,7 +299,6 @@ def detalhamento_por_mes(dfs, aba: str):
         df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
         df["MES_NUM"] = df["DATA_DT"].dt.month
     else:
-        df["DATA_ORIG"] = None
         df["DATA_DT"] = pd.NaT
         df["MES_NUM"] = pd.NA
 
@@ -386,7 +378,7 @@ def detalhamento_grupo(dfs):
     if status_col is not None:
         styler = styler.map(_style_status, subset=[status_col])
 
-    st.dataframe(styler, use_container_width=True, height=altura_df(len(df), max_h=650))
+    st.dataframe(styler, use_container_width=True, height=altura_df(len(df), max_h=650), hide_index=True)
 
 # ==========================================================
 # APP
@@ -495,10 +487,7 @@ def main():
     st.write("")
     aba_sel = st.session_state["aba_dados"]
     if aba_sel == ABA_GRUPO:
-        st.markdown(
-            f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>",
-            unsafe_allow_html=True
-        )
+        st.markdown(f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>", unsafe_allow_html=True)
         detalhamento_grupo(dfs)
     else:
         st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)

@@ -53,44 +53,32 @@ def _limpar_data_series(s: pd.Series) -> pd.Series:
     return s.mask(invalid, None)
 
 def _format_percent_br_from_any(x):
-    """
-    Formata para pt-BR com 2 casas e %:
-    exemplos: 80,50% ; 7,55%
-    Aceita: "-40,00%", "-40,00", "-40", -40, -0.4, 0.0755 etc.
-    """
     if pd.isna(x):
         return ""
-
     if isinstance(x, (int, float)):
         val = float(x)
         if abs(val) <= 1:
             val *= 100
         return f"{val:.2f}%".replace(".", ",")
-
     s = str(x).strip()
     if s == "":
         return ""
-
     has_pct = "%" in s
     s = s.replace("%", "").strip()
-
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
     try:
         val = float(s)
     except Exception:
         return ""
-
     if (not has_pct) and abs(val) <= 1:
         val *= 100
-
     return f"{val:.2f}%".replace(".", ",")
 
 def _is_unnamed(colname: str) -> bool:
     return str(colname).strip().upper().startswith("UNNAMED")
 
 def _has_month_year_token(v: str) -> bool:
-    # Ex.: MAIO/2025, JUN/2026, 05/2026
     s = str(v).strip().upper()
     return ("/" in s) and any(ch.isdigit() for ch in s)
 
@@ -144,7 +132,6 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
-    # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
     try:
@@ -170,7 +157,6 @@ def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
         d26 = df_o.iloc[:, 2::2].values.flatten()[:12]
         df_p = pd.DataFrame({"2025": d25, "2026": d26}, index=MESES).fillna(0)
         df_p.loc["TOTAL"] = df_p.sum()
-
         fig = plt.figure(figsize=(9, 5))
         ax = df_p.plot(kind="bar", ax=plt.gca(), title=f"{ocorrencia} - {titulo_prefixo}")
         for c in ax.containers:
@@ -183,22 +169,16 @@ def grafico_anual_totais(df, titulo_prefixo):
     def _total(linha, cols):
         s = pd.to_numeric(linha.iloc[:, cols].values.flatten(), errors="coerce")
         return float(s[12]) if len(s) >= 13 and pd.notna(s[12]) else float(pd.Series(s[:12]).fillna(0).sum())
-
     reg = []
     for _, r in df.dropna(subset=["OCORRÊNCIAS"]).iterrows():
         df_l = df[df["OCORRÊNCIAS"] == r["OCORRÊNCIAS"]].head(1)
-        reg.append({
-            "OC": str(r["OCORRÊNCIAS"]),
-            "2025": _total(df_l, slice(1, None, 2)),
-            "2026": _total(df_l, slice(2, None, 2))
-        })
-
+        reg.append({"OC": str(r["OCORRÊNCIAS"]),
+                    "2025": _total(df_l, slice(1, None, 2)),
+                    "2026": _total(df_l, slice(2, None, 2))})
     df_t = pd.DataFrame(reg)
-
     dkw = ["drogas", "maconha", "cocaína", "crack"]
     m_dr = df_t["OC"].str.contains("|".join(dkw), case=False, na=False) & (df_t["OC"].str.upper() != "OCORRÊNCIAS A. DROGAS")
     m_ot = ~df_t["OC"].str.contains("|".join(dkw), case=False, na=False) | (df_t["OC"].str.upper() == "OCORRÊNCIAS A. DROGAS")
-
     for d, t in [(df_t[m_dr], "DROGAS"), (df_t[m_ot], "OUTRAS")]:
         if d.empty:
             continue
@@ -219,11 +199,9 @@ def grafico_mensal(df, mes, titulo_prefixo):
     d25 = df.iloc[:, 1::2].iloc[:, idx].fillna(0)
     d26 = df.iloc[:, 2::2].iloc[:, idx].fillna(0)
     df_m = pd.DataFrame({"OC": df["OCORRÊNCIAS"], "2025": d25, "2026": d26}).dropna(subset=["OC"])
-
     dkw = ["drogas", "maconha", "cocaína", "crack"]
     m_dr = df_m["OC"].str.contains("|".join(dkw), case=False, na=False) & (df_m["OC"].str.upper() != "OCORRÊNCIAS A. DROGAS")
     m_ot = ~df_m["OC"].str.contains("|".join(dkw), case=False, na=False) | (df_m["OC"].str.upper() == "OCORRÊNCIAS A. DROGAS")
-
     for d, t in [(df_m[m_dr], "Drogas"), (df_m[m_ot], "Outras")]:
         if d.empty:
             continue
@@ -236,13 +214,12 @@ def grafico_mensal(df, mes, titulo_prefixo):
         st.pyplot(fig, use_container_width=True)
 
 # ==========================================================
-# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP) + ALERTA (sem aba Data indefinida)
+# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP)
 # ==========================================================
 def detalhamento_por_mes(dfs, aba: str):
     if aba not in dfs:
         st.error(f"Aba '{aba}' não encontrada.")
         return
-
     df = dfs[aba].copy()
     df.rename(columns={"ENDERECO": "LOCAL", "COP": "BOU"}, inplace=True)
 
@@ -296,7 +273,7 @@ def detalhamento_por_mes(dfs, aba: str):
             st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
 
 # ==========================================================
-# GRUPO: limpar "UNNAMED", remover linha None/MAIO/2025 etc e formatar porcentagem
+# GRUPO (comparativo) + porcentagem + status colorido com letra preta
 # ==========================================================
 def detalhamento_grupo(dfs):
     if ABA_GRUPO not in dfs:
@@ -306,71 +283,70 @@ def detalhamento_grupo(dfs):
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     df.columns = [str(c).strip().upper() for c in df.columns]
 
-    # 1) Se tiver UNNAMED, geralmente a primeira linha contém os nomes reais (MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS)
-    #    Vamos achar essa linha "header interna".
+    # 1) Detecta e usa "cabeçalho interno" (linha com MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS)
     header_row_idx = None
     for i in range(min(6, len(df))):
         row = df.iloc[i].tolist()
         row_str = [("" if pd.isna(x) else str(x).strip()) for x in row]
         row_up = [s.upper() for s in row_str if s != ""]
-
         has_pct = any("PORCENT" in s for s in row_up)
-        has_status = any("STATUS" == s for s in row_up)
+        has_status = any(s == "STATUS" for s in row_up)
         has_months = sum(_has_month_year_token(s) for s in row_str) >= 1
-
         if has_pct or has_status or has_months:
-            # linha candidata: normalmente é a primeira (i=0)
             header_row_idx = i
             break
 
     if header_row_idx is not None:
         header_vals = df.iloc[header_row_idx].tolist()
         new_cols = list(df.columns)
-
         for j, col in enumerate(new_cols):
             hv = header_vals[j] if j < len(header_vals) else None
             hv_str = "" if pd.isna(hv) else str(hv).strip().upper()
-
             col_up = str(col).strip().upper()
             col_is_periodo = col_up in ("PERÍODO", "PERIODO")
             col_is_unnamed = _is_unnamed(col_up)
-
-            # se coluna é PERÍODO/UNNAMED, e hv tem nome útil, renomeia
             if (col_is_periodo or col_is_unnamed) and hv_str not in ("", "NONE"):
                 new_cols[j] = hv_str
-
         df.columns = new_cols
-
-        # remove linhas até e incluindo a linha de cabeçalho interno
         df = df.iloc[header_row_idx + 1:].copy()
 
-    # 2) Remover linhas sem ocorrência (None/vazio) e cabeçalho duplicado
+    # 2) Limpa linhas sem ocorrência e colunas UNNAMED
     if "OCORRÊNCIAS" in df.columns:
         oc = df["OCORRÊNCIAS"].astype(str).str.strip()
         df = df[oc.ne("") & oc.str.upper().ne("NONE") & oc.str.upper().ne("OCORRÊNCIAS")]
 
-    # 3) Dropar colunas UNNAMED que ainda sobrarem
     df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
 
-    # 4) Formatar PORCENTAGEM para 2 casas pt-BR
-    col_pct = None
-    for c in df.columns:
-        cu = str(c).upper()
-        if "PORCENT" in cu or "PERCENT" in cu:
-            col_pct = c
-            break
+    # 3) Formata porcentagem
+    col_pct = next((c for c in df.columns if "PORCENT" in str(c).upper() or "PERCENT" in str(c).upper()), None)
     if col_pct is not None:
         df[col_pct] = df[col_pct].apply(_format_percent_br_from_any)
 
-    # 5) ORDEM e exibição
+    # 4) ORDEM
     df_show = df.reset_index(drop=True)
     df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
 
+    # 5) STATUS com fundo colorido e letra preta
+    status_col = next((c for c in df_show.columns if str(c).strip().upper() == "STATUS"), None)
+
+    def _style_status(v):
+        s = str(v).strip().upper()
+        if "POSIT" in s:
+            return "background-color:#C6EFCE; color:#000000; font-weight:700;"
+        if "NEGAT" in s:
+            return "background-color:#FFC7CE; color:#000000; font-weight:700;"
+        if "EST" in s:  # ESTÁVEL/ESTAVEL
+            return "background-color:#FFEB9C; color:#000000; font-weight:700;"
+        return "color:#000000; font-weight:700;"
+
+    styler = df_show.style.set_properties(**{"text-align": "center"}).hide(axis="index")
+    if status_col is not None:
+        styler = styler.map(_style_status, subset=[status_col])
+
     st.dataframe(
-        df_show,
+        styler,
         use_container_width=True,
         height=altura_df(len(df_show), max_h=650),
-        hide_index=True
     )
 
 # ==========================================================

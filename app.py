@@ -352,11 +352,11 @@ def detalhamento_grupo(dfs):
     def _style_status(v):
         s = str(v).strip().upper()
         if "POSIT" in s:
-            return "background-color:#C6EFCE; color:#000000; font-weight:700;"
+            return "background-color:#00C853; color:#000000; font-weight:700;"
         if "NEGAT" in s:
-            return "background-color:#FFC7CE; color:#000000; font-weight:700;"
+            return "background-color:#D50000; color:#000000; font-weight:700;"
         if "EST" in s:  # ESTÁVEL/ESTAVEL
-            return "background-color:#FFEB9C; color:#000000; font-weight:700;"
+            return "background-color:#FFAB00; color:#000000; font-weight:700;"
         return "color:#000000; font-weight:700;"
 
     styler = df.style.set_properties(**{"text-align": "center"})

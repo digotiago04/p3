@@ -474,7 +474,8 @@ def main():
         if st.button("CVP", use_container_width=True):
             st.session_state["aba_dados"] = ABA_CVP
     with bb4:
-        if st.button("Comparativo mês atual", use_container_width=True):
+        if st.button("Comparativo mês atual\n2025 x 2026", use_container_width=True):
+            st.session_state["aba_dados"] = ABA_GRUPO
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]

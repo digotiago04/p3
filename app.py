@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import re
 
 # ==========================================================
 # CONFIG
@@ -18,7 +19,7 @@ MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome real da aba
 ABA_CVLI = "CVLI"
 ABA_TENT = "TENTATIVA"
 ABA_CVP = "CVP"
-ABA_GRUPO = "GRUPO"  # comparativo 2025x2026
+ABA_GRUPO = "GRUPO"
 
 # ==========================================================
 # ESTILO + CENTRALIZAÇÃO
@@ -31,11 +32,23 @@ st.markdown("""
 .center-sub   {text-align:center; font-weight:700; font-size:18px; margin-top:-0.25rem;}
 .center {text-align:center;}
 hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
+
 div[data-testid="stCheckbox"] label { font-size: 13px; }
-.stButton>button {padding: 0.35rem 0.9rem;}
+
+/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
 button[data-baseweb="tab"] { justify-content: center; }
+
+/* botões */
+.stButton>button {padding: 0.35rem 0.9rem;}
+
+/* permitir quebra de linha nos botões */
+div.stButton > button {
+  white-space: pre-line;
+  line-height: 1.15;
+  text-align: center;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,6 +94,69 @@ def _is_unnamed(colname: str) -> bool:
 def _has_month_year_token(v: str) -> bool:
     s = str(v).strip().upper()
     return ("/" in s) and any(ch.isdigit() for ch in s)
+
+def _remove_acentos_upper(s: str) -> str:
+    s = s.upper()
+    return (s.replace("Á","A").replace("Ã","A").replace("Â","A")
+             .replace("É","E").replace("Ê","E")
+             .replace("Í","I")
+             .replace("Ó","O").replace("Õ","O").replace("Ô","O")
+             .replace("Ú","U").replace("Ç","C"))
+
+def _mes_para_nome_pt(token_mes: str) -> str:
+    nomes = {
+        1:"JANEIRO",2:"FEVEREIRO",3:"MARÇO",4:"ABRIL",5:"MAIO",6:"JUNHO",
+        7:"JULHO",8:"AGOSTO",9:"SETEMBRO",10:"OUTUBRO",11:"NOVEMBRO",12:"DEZEMBRO"
+    }
+    abrev = {
+        "JAN":"JANEIRO","FEV":"FEVEREIRO","MAR":"MARÇO","ABR":"ABRIL","MAI":"MAIO","JUN":"JUNHO",
+        "JUL":"JULHO","AGO":"AGOSTO","SET":"SETEMBRO","OUT":"OUTUBRO","NOV":"NOVEMBRO","DEZ":"DEZEMBRO"
+    }
+
+    t = str(token_mes).strip()
+    if t.isdigit():
+        n = int(t)
+        return nomes.get(n, "MÊS")
+
+    t2 = _remove_acentos_upper(t)
+    if t2[:3] in abrev:
+        return abrev[t2[:3]]
+
+    for k, v in abrev.items():
+        if t2.startswith(k):
+            return v
+
+    return t.upper()
+
+def detectar_mes_grupo(dfs) -> str:
+    if ABA_GRUPO not in dfs:
+        return "MÊS"
+
+    df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
+    if df.empty:
+        return "MÊS"
+
+    pattern = re.compile(r"^\s*([A-Za-zÀ-ÿ]{3,}|0?[1-9]|1[0-2])\s*/\s*20(25|26)\s*$")
+
+    # procura nas primeiras linhas (cabeçalho interno)
+    for i in range(min(6, len(df))):
+        row = df.iloc[i].tolist()
+        for cell in row:
+            if pd.isna(cell):
+                continue
+            s = str(cell).strip()
+            m = pattern.match(s)
+            if m:
+                return _mes_para_nome_pt(m.group(1))
+
+    # procura nos nomes de colunas
+    for c in df.columns:
+        s = str(c).strip()
+        m = pattern.match(s)
+        if m:
+            return _mes_para_nome_pt(m.group(1))
+
+    return "MÊS"
 
 # ==========================================================
 # LOGIN
@@ -132,6 +208,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
+    # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
     try:
@@ -250,13 +327,6 @@ def detalhamento_por_mes(dfs, aba: str):
         st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
         with st.expander("Ver registros com DATA inválida"):
             df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
-            if "DATA" in df_bad.columns:
-                def fmt_data(x):
-                    if isinstance(x, (pd.Timestamp, datetime.datetime, datetime.date)):
-                        return x.strftime("%d/%m/%Y")
-                    return "" if pd.isna(x) else str(x)
-                df_bad["DATA"] = df_invalid["DATA_ORIG"].apply(fmt_data).reset_index(drop=True)
-            df_bad.insert(0, "ORDEM", range(1, len(df_bad) + 1))
             st.dataframe(df_bad, use_container_width=True, height=altura_df(len(df_bad)), hide_index=True)
 
     tabs = st.tabs([m.title() for m in MESES])
@@ -269,11 +339,10 @@ def detalhamento_por_mes(dfs, aba: str):
             if "DATA" in colunas_presentes:
                 dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
-            df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
             st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
 
 # ==========================================================
-# GRUPO (comparativo) + porcentagem + status colorido com letra preta
+# GRUPO (comparativo) + % + STATUS colorido (cores vivas)
 # ==========================================================
 def detalhamento_grupo(dfs):
     if ABA_GRUPO not in dfs:
@@ -283,7 +352,7 @@ def detalhamento_grupo(dfs):
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     df.columns = [str(c).strip().upper() for c in df.columns]
 
-    # --- Detecta e usa a linha interna do cabeçalho (MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS) ---
+    # detecta cabeçalho interno
     header_row_idx = None
     for i in range(min(6, len(df))):
         row = df.iloc[i].tolist()
@@ -291,13 +360,10 @@ def detalhamento_grupo(dfs):
         row_up = [s.upper() for s in row_str if s != ""]
         has_pct = any("PORCENT" in s for s in row_up)
         has_status = any(s == "STATUS" for s in row_up)
-        has_months = sum(("/" in s and any(ch.isdigit() for ch in s)) for s in row_str) >= 1
+        has_months = sum(_has_month_year_token(s) for s in row_str) >= 1
         if has_pct or has_status or has_months:
             header_row_idx = i
             break
-
-    def _is_unnamed(c): 
-        return str(c).strip().upper().startswith("UNNAMED")
 
     if header_row_idx is not None:
         header_vals = df.iloc[header_row_idx].tolist()
@@ -311,42 +377,16 @@ def detalhamento_grupo(dfs):
         df.columns = new_cols
         df = df.iloc[header_row_idx + 1:].copy()
 
-    # Limpa linhas inválidas e colunas UNNAMED restantes
     if "OCORRÊNCIAS" in df.columns:
         oc = df["OCORRÊNCIAS"].astype(str).str.strip()
         df = df[oc.ne("") & oc.str.upper().ne("NONE") & oc.str.upper().ne("OCORRÊNCIAS")]
 
     df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
 
-    # Formatar porcentagem pt-BR com 2 casas
-    def _format_percent_br_from_any(x):
-        if pd.isna(x):
-            return ""
-        if isinstance(x, (int, float)):
-            val = float(x)
-            if abs(val) <= 1:
-                val *= 100
-            return f"{val:.2f}%".replace(".", ",")
-        s = str(x).strip()
-        if s == "":
-            return ""
-        has_pct = "%" in s
-        s = s.replace("%", "").strip()
-        if "," in s:
-            s = s.replace(".", "").replace(",", ".")
-        try:
-            val = float(s)
-        except Exception:
-            return ""
-        if (not has_pct) and abs(val) <= 1:
-            val *= 100
-        return f"{val:.2f}%".replace(".", ",")
-
     col_pct = next((c for c in df.columns if "PORCENT" in str(c).upper() or "PERCENT" in str(c).upper()), None)
     if col_pct is not None:
         df[col_pct] = df[col_pct].apply(_format_percent_br_from_any)
 
-    # --- STYLE do STATUS: fundo colorido e letra preta ---
     status_col = next((c for c in df.columns if str(c).strip().upper() == "STATUS"), None)
 
     def _style_status(v):
@@ -355,26 +395,20 @@ def detalhamento_grupo(dfs):
             return "background-color:#00C853; color:#000000; font-weight:700;"
         if "NEGAT" in s:
             return "background-color:#D50000; color:#000000; font-weight:700;"
-        if "EST" in s:  # ESTÁVEL/ESTAVEL
+        if "EST" in s:
             return "background-color:#FFAB00; color:#000000; font-weight:700;"
         return "color:#000000; font-weight:700;"
 
-    styler = df.style.set_properties(**{"text-align": "center"})
+    styler = df.style.set_properties(**{"text-align": "center"}).hide(axis="index")
     if status_col is not None:
         styler = styler.map(_style_status, subset=[status_col])
-
-    # Esconde o índice (0,1,2...) no output
-    try:
-        styler = styler.hide(axis="index")
-    except Exception:
-        pass
 
     st.dataframe(
         styler,
         use_container_width=True,
         height=altura_df(len(df), max_h=650),
-        hide_index=True,  # reforça para versões do Streamlit que suportam
     )
+
 # ==========================================================
 # APP
 # ==========================================================
@@ -463,6 +497,8 @@ def main():
     if "aba_dados" not in st.session_state:
         st.session_state["aba_dados"] = ABA_CVLI
 
+    mes_grupo = detectar_mes_grupo(dfs)  # <-- automático
+
     bb1, bb2, bb3, bb4 = st.columns(4)
     with bb1:
         if st.button("CVLI", use_container_width=True):
@@ -474,7 +510,7 @@ def main():
         if st.button("CVP", use_container_width=True):
             st.session_state["aba_dados"] = ABA_CVP
     with bb4:
-        if st.button("Comparativo mês atual\n2025 x 2026", use_container_width=True):
+        if st.button(f"COMPARATIVO DE {mes_grupo}\n2025 x 2026", use_container_width=True):
             st.session_state["aba_dados"] = ABA_GRUPO
 
     st.write("")

@@ -515,12 +515,18 @@ def main():
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]
-    if aba_sel == ABA_GRUPO:
-        st.markdown("<div class='center' style='font-weight:600;'>Comparativo 2025x2026 - GRUPO</div>", unsafe_allow_html=True)
-        detalhamento_grupo(dfs)
-    else:
-        st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
-        detalhamento_por_mes(dfs, aba_sel)
+if aba_sel == ABA_GRUPO:
+    st.markdown(
+        f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>",
+        unsafe_allow_html=True
+    )
+    detalhamento_grupo(dfs)
+else:
+    st.markdown(
+        f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>",
+        unsafe_allow_html=True
+    )
+    detalhamento_por_mes(dfs, aba_sel)
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

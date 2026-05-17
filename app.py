@@ -14,7 +14,7 @@ SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 MESES = ["JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"]
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
-MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}  # nome exibido -> nome real da aba
+MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}
 
 ABA_CVLI = "CVLI"
 ABA_TENT = "TENTATIVA"
@@ -35,15 +35,11 @@ hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
 
 div[data-testid="stCheckbox"] label { font-size: 13px; }
 
-/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
 button[data-baseweb="tab"] { justify-content: center; }
 
-/* botões */
 .stButton>button {padding: 0.35rem 0.9rem;}
-
-/* permitir quebra de linha nos botões */
 div.stButton > button {
   white-space: pre-line;
   line-height: 1.15;
@@ -131,17 +127,14 @@ def _mes_para_nome_pt(token_mes: str) -> str:
 def detectar_mes_grupo(dfs) -> str:
     if ABA_GRUPO not in dfs:
         return "MÊS"
-
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     if df.empty:
         return "MÊS"
 
     pattern = re.compile(r"^\s*([A-Za-zÀ-ÿ]{3,}|0?[1-9]|1[0-2])\s*/\s*20(25|26)\s*$")
 
-    # procura nas primeiras linhas (cabeçalho interno)
     for i in range(min(6, len(df))):
-        row = df.iloc[i].tolist()
-        for cell in row:
+        for cell in df.iloc[i].tolist():
             if pd.isna(cell):
                 continue
             s = str(cell).strip()
@@ -149,7 +142,6 @@ def detectar_mes_grupo(dfs) -> str:
             if m:
                 return _mes_para_nome_pt(m.group(1))
 
-    # procura nos nomes de colunas
     for c in df.columns:
         s = str(c).strip()
         m = pattern.match(s)
@@ -208,7 +200,6 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
-    # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
     try:
@@ -322,13 +313,6 @@ def detalhamento_por_mes(dfs, aba: str):
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
 
-    df_invalid = df[df["DATA_DT"].isna()].copy()
-    if not df_invalid.empty:
-        st.warning(f"⚠️ {len(df_invalid)} registro(s) com DATA vazia/inválida (não entrou em nenhum mês).")
-        with st.expander("Ver registros com DATA inválida"):
-            df_bad = df_invalid[colunas_presentes].copy().reset_index(drop=True)
-            st.dataframe(df_bad, use_container_width=True, height=altura_df(len(df_bad)), hide_index=True)
-
     tabs = st.tabs([m.title() for m in MESES])
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
@@ -352,7 +336,6 @@ def detalhamento_grupo(dfs):
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     df.columns = [str(c).strip().upper() for c in df.columns]
 
-    # detecta cabeçalho interno
     header_row_idx = None
     for i in range(min(6, len(df))):
         row = df.iloc[i].tolist()
@@ -403,11 +386,7 @@ def detalhamento_grupo(dfs):
     if status_col is not None:
         styler = styler.map(_style_status, subset=[status_col])
 
-    st.dataframe(
-        styler,
-        use_container_width=True,
-        height=altura_df(len(df), max_h=650),
-    )
+    st.dataframe(styler, use_container_width=True, height=altura_df(len(df), max_h=650))
 
 # ==========================================================
 # APP
@@ -497,7 +476,7 @@ def main():
     if "aba_dados" not in st.session_state:
         st.session_state["aba_dados"] = ABA_CVLI
 
-    mes_grupo = detectar_mes_grupo(dfs)  # <-- automático
+    mes_grupo = detectar_mes_grupo(dfs)
 
     bb1, bb2, bb3, bb4 = st.columns(4)
     with bb1:
@@ -515,18 +494,15 @@ def main():
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]
-if aba_sel == ABA_GRUPO:
-    st.markdown(
-        f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>",
-        unsafe_allow_html=True
-    )
-    detalhamento_grupo(dfs)
-else:
-    st.markdown(
-        f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>",
-        unsafe_allow_html=True
-    )
-    detalhamento_por_mes(dfs, aba_sel)
+    if aba_sel == ABA_GRUPO:
+        st.markdown(
+            f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>",
+            unsafe_allow_html=True
+        )
+        detalhamento_grupo(dfs)
+    else:
+        st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
+        detalhamento_por_mes(dfs, aba_sel)
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

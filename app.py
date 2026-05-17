@@ -283,7 +283,7 @@ def detalhamento_grupo(dfs):
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     df.columns = [str(c).strip().upper() for c in df.columns]
 
-    # 1) Detecta e usa "cabeçalho interno" (linha com MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS)
+    # --- Detecta e usa a linha interna do cabeçalho (MAIO/2025, MAIO/2026, PORCENTAGEM, STATUS) ---
     header_row_idx = None
     for i in range(min(6, len(df))):
         row = df.iloc[i].tolist()
@@ -291,10 +291,13 @@ def detalhamento_grupo(dfs):
         row_up = [s.upper() for s in row_str if s != ""]
         has_pct = any("PORCENT" in s for s in row_up)
         has_status = any(s == "STATUS" for s in row_up)
-        has_months = sum(_has_month_year_token(s) for s in row_str) >= 1
+        has_months = sum(("/" in s and any(ch.isdigit() for ch in s)) for s in row_str) >= 1
         if has_pct or has_status or has_months:
             header_row_idx = i
             break
+
+    def _is_unnamed(c): 
+        return str(c).strip().upper().startswith("UNNAMED")
 
     if header_row_idx is not None:
         header_vals = df.iloc[header_row_idx].tolist()
@@ -303,31 +306,48 @@ def detalhamento_grupo(dfs):
             hv = header_vals[j] if j < len(header_vals) else None
             hv_str = "" if pd.isna(hv) else str(hv).strip().upper()
             col_up = str(col).strip().upper()
-            col_is_periodo = col_up in ("PERÍODO", "PERIODO")
-            col_is_unnamed = _is_unnamed(col_up)
-            if (col_is_periodo or col_is_unnamed) and hv_str not in ("", "NONE"):
+            if (col_up in ("PERÍODO", "PERIODO") or _is_unnamed(col_up)) and hv_str not in ("", "NONE"):
                 new_cols[j] = hv_str
         df.columns = new_cols
         df = df.iloc[header_row_idx + 1:].copy()
 
-    # 2) Limpa linhas sem ocorrência e colunas UNNAMED
+    # Limpa linhas inválidas e colunas UNNAMED restantes
     if "OCORRÊNCIAS" in df.columns:
         oc = df["OCORRÊNCIAS"].astype(str).str.strip()
         df = df[oc.ne("") & oc.str.upper().ne("NONE") & oc.str.upper().ne("OCORRÊNCIAS")]
 
     df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
 
-    # 3) Formata porcentagem
+    # Formatar porcentagem pt-BR com 2 casas
+    def _format_percent_br_from_any(x):
+        if pd.isna(x):
+            return ""
+        if isinstance(x, (int, float)):
+            val = float(x)
+            if abs(val) <= 1:
+                val *= 100
+            return f"{val:.2f}%".replace(".", ",")
+        s = str(x).strip()
+        if s == "":
+            return ""
+        has_pct = "%" in s
+        s = s.replace("%", "").strip()
+        if "," in s:
+            s = s.replace(".", "").replace(",", ".")
+        try:
+            val = float(s)
+        except Exception:
+            return ""
+        if (not has_pct) and abs(val) <= 1:
+            val *= 100
+        return f"{val:.2f}%".replace(".", ",")
+
     col_pct = next((c for c in df.columns if "PORCENT" in str(c).upper() or "PERCENT" in str(c).upper()), None)
     if col_pct is not None:
         df[col_pct] = df[col_pct].apply(_format_percent_br_from_any)
 
-    # 4) ORDEM
-    df_show = df.reset_index(drop=True)
-    df_show.insert(0, "ORDEM", range(1, len(df_show) + 1))
-
-    # 5) STATUS com fundo colorido e letra preta
-    status_col = next((c for c in df_show.columns if str(c).strip().upper() == "STATUS"), None)
+    # --- STYLE do STATUS: fundo colorido e letra preta ---
+    status_col = next((c for c in df.columns if str(c).strip().upper() == "STATUS"), None)
 
     def _style_status(v):
         s = str(v).strip().upper()
@@ -339,16 +359,22 @@ def detalhamento_grupo(dfs):
             return "background-color:#FFEB9C; color:#000000; font-weight:700;"
         return "color:#000000; font-weight:700;"
 
-    styler = df_show.style.set_properties(**{"text-align": "center"}).hide(axis="index")
+    styler = df.style.set_properties(**{"text-align": "center"})
     if status_col is not None:
         styler = styler.map(_style_status, subset=[status_col])
+
+    # Esconde o índice (0,1,2...) no output
+    try:
+        styler = styler.hide(axis="index")
+    except Exception:
+        pass
 
     st.dataframe(
         styler,
         use_container_width=True,
-        height=altura_df(len(df_show), max_h=650),
+        height=altura_df(len(df), max_h=650),
+        hide_index=True,  # reforça para versões do Streamlit que suportam
     )
-
 # ==========================================================
 # APP
 # ==========================================================

@@ -21,6 +21,10 @@ ABA_TENT = "TENTATIVA"
 ABA_CVP = "CVP"
 ABA_GRUPO = "GRUPO"
 
+# NOVO: Determinações da P3 (abas na planilha)
+ABA_P3_EVENTOS = "EVENTOS"
+ABA_P3_VISITAS = "VISITAS"
+
 # ==========================================================
 # ESTILO + CENTRALIZAÇÃO
 # ==========================================================
@@ -142,6 +146,50 @@ def detectar_mes_grupo(dfs) -> str:
         if m:
             return _mes_para_nome_pt(m.group(1))
     return "MÊS"
+
+def exibir_aba_simples_com_mes(df: pd.DataFrame, titulo: str):
+    """
+    Exibe tabela inteira; se existir coluna DATA, separa automaticamente por mês.
+    """
+    if df is None or df.empty:
+        st.info("Sem registros.")
+        return
+
+    # limpa colunas UNNAMED e colunas/vazias
+    df = df.copy().dropna(axis=1, how="all").dropna(how="all")
+    df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
+
+    st.markdown(f"<div class='center' style='font-weight:600;'>{titulo}</div>", unsafe_allow_html=True)
+
+    cols = [c for c in df.columns]
+    if "DATA" in cols:
+        s = _limpar_data_series(df["DATA"])
+        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["_DATA_DT"] = dt
+        df["_MES_NUM"] = df["_DATA_DT"].dt.month
+
+        invalid = df[df["_DATA_DT"].isna()].copy()
+        if not invalid.empty:
+            st.warning(f"⚠️ {len(invalid)} registro(s) com DATA vazia/inválida.")
+            with st.expander("Ver registros com DATA inválida"):
+                show_bad = invalid.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
+                st.dataframe(show_bad.reset_index(drop=True), use_container_width=True,
+                             height=altura_df(len(show_bad), max_h=520), hide_index=True)
+
+        tabs = st.tabs([m.title() for m in MESES])
+        for i, mes_nome in enumerate(MESES, start=1):
+            with tabs[i-1]:
+                dfm = df[df["_MES_NUM"] == i].copy()
+                dfm = dfm.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
+
+                if dfm.empty:
+                    st.info("Sem registros neste mês.")
+                else:
+                    st.dataframe(dfm.reset_index(drop=True), use_container_width=True,
+                                 height=altura_df(len(dfm), max_h=520), hide_index=True)
+    else:
+        st.dataframe(df.reset_index(drop=True), use_container_width=True,
+                     height=altura_df(len(df), max_h=650), hide_index=True)
 
 # ==========================================================
 # LOGIN
@@ -294,13 +342,12 @@ def detalhamento_por_mes(dfs, aba: str):
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
     if "DATA" in df.columns:
-        df["DATA_ORIG"] = df["DATA"]
-        s = _limpar_data_series(df["DATA_ORIG"])
-        df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        df["MES_NUM"] = df["DATA_DT"].dt.month
+        s = _limpar_data_series(df["DATA"])
+        df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["_MES_NUM"] = df["_DATA_DT"].dt.month
     else:
-        df["DATA_DT"] = pd.NaT
-        df["MES_NUM"] = pd.NA
+        df["_DATA_DT"] = pd.NaT
+        df["_MES_NUM"] = pd.NA
 
     if chave_dropna in df.columns:
         df = df.dropna(subset=[chave_dropna])
@@ -308,14 +355,13 @@ def detalhamento_por_mes(dfs, aba: str):
     tabs = st.tabs([m.title() for m in MESES])
     for i, m in enumerate(MESES, start=1):
         with tabs[i-1]:
-            dfm = df[df["MES_NUM"] == i].copy()
+            dfm = df[df["_MES_NUM"] == i].copy()
+            dfm = dfm.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
             if dfm.empty:
                 st.info("Sem registros neste mês.")
                 continue
-            if "DATA" in colunas_presentes:
-                dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
-            df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
-            st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show)), hide_index=True)
+            st.dataframe(dfm[colunas_presentes].reset_index(drop=True), use_container_width=True,
+                         height=altura_df(len(dfm), max_h=520), hide_index=True)
 
 # ==========================================================
 # GRUPO (comparativo) + % + STATUS colorido (cores vivas)
@@ -463,6 +509,9 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # ======================================================
+    # DADOS DAS OCORRÊNCIAS
+    # ======================================================
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
 
     if "aba_dados" not in st.session_state:
@@ -492,6 +541,30 @@ def main():
     else:
         st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
         detalhamento_por_mes(dfs, aba_sel)
+
+    # ======================================================
+    # NOVO: DETERMINAÇÕES DA P3
+    # ======================================================
+    st.markdown("<hr/>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES DA P3</div>", unsafe_allow_html=True)
+
+    if "aba_p3" not in st.session_state:
+        st.session_state["aba_p3"] = ABA_P3_EVENTOS
+
+    p1, p2 = st.columns(2)
+    with p1:
+        if st.button("EVENTOS", use_container_width=True):
+            st.session_state["aba_p3"] = ABA_P3_EVENTOS
+    with p2:
+        if st.button("VISITAS", use_container_width=True):
+            st.session_state["aba_p3"] = ABA_P3_VISITAS
+
+    st.write("")
+    aba_p3_sel = st.session_state["aba_p3"]
+    if aba_p3_sel not in dfs:
+        st.error(f"Aba '{aba_p3_sel}' não encontrada na planilha.")
+    else:
+        exibir_aba_simples_com_mes(dfs[aba_p3_sel], f"{aba_p3_sel}")
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

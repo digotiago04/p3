@@ -21,7 +21,8 @@ ABA_TENT = "TENTATIVA"
 ABA_CVP = "CVP"
 ABA_GRUPO = "GRUPO"
 
-# NOVO: Determinações da P3 (abas na planilha)
+# NOVO: Determinações e Orientações (abas na planilha)
+ABA_P3_DETERMINACOES = "DETERMINAÇÕES"
 ABA_P3_EVENTOS = "EVENTOS"
 ABA_P3_VISITAS = "VISITAS"
 
@@ -131,7 +132,9 @@ def detectar_mes_grupo(dfs) -> str:
     df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
     if df.empty:
         return "MÊS"
+
     pattern = re.compile(r"^\s*([A-Za-zÀ-ÿ]{3,}|0?[1-9]|1[0-2])\s*/\s*20(25|26)\s*$")
+
     for i in range(min(6, len(df))):
         for cell in df.iloc[i].tolist():
             if pd.isna(cell):
@@ -140,29 +143,26 @@ def detectar_mes_grupo(dfs) -> str:
             m = pattern.match(s)
             if m:
                 return _mes_para_nome_pt(m.group(1))
+
     for c in df.columns:
         s = str(c).strip()
         m = pattern.match(s)
         if m:
             return _mes_para_nome_pt(m.group(1))
+
     return "MÊS"
 
 def exibir_aba_simples_com_mes(df: pd.DataFrame, titulo: str):
-    """
-    Exibe tabela inteira; se existir coluna DATA, separa automaticamente por mês.
-    """
     if df is None or df.empty:
         st.info("Sem registros.")
         return
 
-    # limpa colunas UNNAMED e colunas/vazias
     df = df.copy().dropna(axis=1, how="all").dropna(how="all")
     df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
 
     st.markdown(f"<div class='center' style='font-weight:600;'>{titulo}</div>", unsafe_allow_html=True)
 
-    cols = [c for c in df.columns]
-    if "DATA" in cols:
+    if "DATA" in df.columns:
         s = _limpar_data_series(df["DATA"])
         dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
         df["_DATA_DT"] = dt
@@ -181,7 +181,6 @@ def exibir_aba_simples_com_mes(df: pd.DataFrame, titulo: str):
             with tabs[i-1]:
                 dfm = df[df["_MES_NUM"] == i].copy()
                 dfm = dfm.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
-
                 if dfm.empty:
                     st.info("Sem registros neste mês.")
                 else:
@@ -225,7 +224,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df_raw = xls.parse(sheet, header=None).dropna(axis=1, how="all")
 
         header_idx = 2
-        for idx, row in df_raw.head(20).iterrows():
+        for idx, row in df_raw.head(25).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
                 header_idx = idx
@@ -253,115 +252,6 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         data_atual = "não localizada"
 
     return dfs, data_atual
-
-# ==========================================================
-# GRÁFICOS
-# ==========================================================
-def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
-    for ocorrencia in selecionadas:
-        df_o = df[df["OCORRÊNCIAS"] == ocorrencia]
-        if df_o.empty:
-            continue
-        d25 = df_o.iloc[:, 1::2].values.flatten()[:12]
-        d26 = df_o.iloc[:, 2::2].values.flatten()[:12]
-        df_p = pd.DataFrame({"2025": d25, "2026": d26}, index=MESES).fillna(0)
-        df_p.loc["TOTAL"] = df_p.sum()
-        fig = plt.figure(figsize=(9, 5))
-        ax = df_p.plot(kind="bar", ax=plt.gca(), title=f"{ocorrencia} - {titulo_prefixo}")
-        for c in ax.containers:
-            ax.bar_label(c, fmt="%.0f")
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-
-def grafico_anual_totais(df, titulo_prefixo):
-    def _total(linha, cols):
-        s = pd.to_numeric(linha.iloc[:, cols].values.flatten(), errors="coerce")
-        return float(s[12]) if len(s) >= 13 and pd.notna(s[12]) else float(pd.Series(s[:12]).fillna(0).sum())
-    reg = []
-    for _, r in df.dropna(subset=["OCORRÊNCIAS"]).iterrows():
-        df_l = df[df["OCORRÊNCIAS"] == r["OCORRÊNCIAS"]].head(1)
-        reg.append({"OC": str(r["OCORRÊNCIAS"]),
-                    "2025": _total(df_l, slice(1, None, 2)),
-                    "2026": _total(df_l, slice(2, None, 2))})
-    df_t = pd.DataFrame(reg)
-    dkw = ["drogas", "maconha", "cocaína", "crack"]
-    m_dr = df_t["OC"].str.contains("|".join(dkw), case=False, na=False) & (df_t["OC"].str.upper() != "OCORRÊNCIAS A. DROGAS")
-    m_ot = ~df_t["OC"].str.contains("|".join(dkw), case=False, na=False) | (df_t["OC"].str.upper() == "OCORRÊNCIAS A. DROGAS")
-    for d, t in [(df_t[m_dr], "DROGAS"), (df_t[m_ot], "OUTRAS")]:
-        if d.empty:
-            continue
-        fig = plt.figure(figsize=(10, 5))
-        ax = d.set_index("OC")[["2025", "2026"]].plot(kind="bar", ax=plt.gca(), title=f"{t} - {titulo_prefixo}")
-        for c in ax.containers:
-            ax.bar_label(c, fmt="%.0f")
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-
-def grafico_mensal(df, mes, titulo_prefixo):
-    mes = mes.upper()
-    if mes not in MESES:
-        st.warning("Selecione um mês válido.")
-        return
-    idx = MESES.index(mes)
-    d25 = df.iloc[:, 1::2].iloc[:, idx].fillna(0)
-    d26 = df.iloc[:, 2::2].iloc[:, idx].fillna(0)
-    df_m = pd.DataFrame({"OC": df["OCORRÊNCIAS"], "2025": d25, "2026": d26}).dropna(subset=["OC"])
-    dkw = ["drogas", "maconha", "cocaína", "crack"]
-    m_dr = df_m["OC"].str.contains("|".join(dkw), case=False, na=False) & (df_m["OC"].str.upper() != "OCORRÊNCIAS A. DROGAS")
-    m_ot = ~df_m["OC"].str.contains("|".join(dkw), case=False, na=False) | (df_m["OC"].str.upper() == "OCORRÊNCIAS A. DROGAS")
-    for d, t in [(df_m[m_dr], "Drogas"), (df_m[m_ot], "Outras")]:
-        if d.empty:
-            continue
-        fig = plt.figure(figsize=(9, 5))
-        ax = d.set_index("OC")[["2025", "2026"]].plot(kind="bar", ax=plt.gca(), title=f"{t} - {mes} - {titulo_prefixo}")
-        for c in ax.containers:
-            ax.bar_label(c, fmt="%.0f")
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-
-# ==========================================================
-# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP)
-# ==========================================================
-def detalhamento_por_mes(dfs, aba: str):
-    if aba not in dfs:
-        st.error(f"Aba '{aba}' não encontrada.")
-        return
-    df = dfs[aba].copy()
-    df.rename(columns={"ENDERECO": "LOCAL", "COP": "BOU"}, inplace=True)
-
-    if aba.upper() == "CVP":
-        colunas_exibir = ["TIPO", "DATA", "HORA", "LOCAL", "INSTRUMENTO", "BOU PC"]
-        chave_dropna = "TIPO"
-    else:
-        colunas_exibir = ["NOME", "IDADE", "DATA", "LOCAL", "MEIO EMPREGADO", "BOU"]
-        chave_dropna = "NOME"
-
-    colunas_presentes = [c for c in colunas_exibir if c in df.columns]
-
-    if "DATA" in df.columns:
-        s = _limpar_data_series(df["DATA"])
-        df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        df["_MES_NUM"] = df["_DATA_DT"].dt.month
-    else:
-        df["_DATA_DT"] = pd.NaT
-        df["_MES_NUM"] = pd.NA
-
-    if chave_dropna in df.columns:
-        df = df.dropna(subset=[chave_dropna])
-
-    tabs = st.tabs([m.title() for m in MESES])
-    for i, m in enumerate(MESES, start=1):
-        with tabs[i-1]:
-            dfm = df[df["_MES_NUM"] == i].copy()
-            dfm = dfm.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
-            if dfm.empty:
-                st.info("Sem registros neste mês.")
-                continue
-            st.dataframe(dfm[colunas_presentes].reset_index(drop=True), use_container_width=True,
-                         height=altura_df(len(dfm), max_h=520), hide_index=True)
 
 # ==========================================================
 # GRUPO (comparativo) + % + STATUS colorido (cores vivas)
@@ -448,6 +338,7 @@ def main():
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
+    # Localidade
     st.write("")
     cL, cC, cR = st.columns([1, 2, 1])
     with cC:
@@ -486,6 +377,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # Gráfico Anual
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
     b1, b2 = st.columns(2)
     with b1:
@@ -500,6 +392,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # Gráfico Mensal
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
@@ -543,19 +436,22 @@ def main():
         detalhamento_por_mes(dfs, aba_sel)
 
     # ======================================================
-    # NOVO: DETERMINAÇÕES DA P3
+    # DETERMINAÇÕES E ORIENTAÇÕES
     # ======================================================
     st.markdown("<hr/>", unsafe_allow_html=True)
-    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES DA P3</div>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES E ORIENTAÇÕES</div>", unsafe_allow_html=True)
 
     if "aba_p3" not in st.session_state:
-        st.session_state["aba_p3"] = ABA_P3_EVENTOS
+        st.session_state["aba_p3"] = ABA_P3_DETERMINACOES
 
-    p1, p2 = st.columns(2)
+    p1, p2, p3 = st.columns(3)
     with p1:
+        if st.button("DETERMINAÇÕES", use_container_width=True):
+            st.session_state["aba_p3"] = ABA_P3_DETERMINACOES
+    with p2:
         if st.button("EVENTOS", use_container_width=True):
             st.session_state["aba_p3"] = ABA_P3_EVENTOS
-    with p2:
+    with p3:
         if st.button("VISITAS", use_container_width=True):
             st.session_state["aba_p3"] = ABA_P3_VISITAS
 
@@ -564,7 +460,7 @@ def main():
     if aba_p3_sel not in dfs:
         st.error(f"Aba '{aba_p3_sel}' não encontrada na planilha.")
     else:
-        exibir_aba_simples_com_mes(dfs[aba_p3_sel], f"{aba_p3_sel}")
+        exibir_aba_simples_com_mes(dfs[aba_p3_sel], aba_p3_sel)
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

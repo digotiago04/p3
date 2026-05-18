@@ -21,8 +21,9 @@ ABA_TENT = "TENTATIVA"
 ABA_CVP = "CVP"
 ABA_GRUPO = "GRUPO"
 
-# NOVO: Determinações e Orientações (abas na planilha)
-ABA_P3_DETERMINACOES = "DETERMINAÇÕES"
+# DETERMINAÇÕES E ORIENTAÇÕES (nomes reais das abas no Sheets)
+# Botão "DETERMINAÇÕES" aponta para a aba ORIENTACOES (como está na planilha)
+ABA_P3_DETERMINACOES = "ORIENTACOES"
 ABA_P3_EVENTOS = "EVENTOS"
 ABA_P3_VISITAS = "VISITAS"
 
@@ -159,13 +160,13 @@ def exibir_aba_simples_com_mes(df: pd.DataFrame, titulo: str):
 
     df = df.copy().dropna(axis=1, how="all").dropna(how="all")
     df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
+    df.columns = df.columns.astype(str).str.strip().str.upper()
 
     st.markdown(f"<div class='center' style='font-weight:600;'>{titulo}</div>", unsafe_allow_html=True)
 
     if "DATA" in df.columns:
         s = _limpar_data_series(df["DATA"])
-        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        df["_DATA_DT"] = dt
+        df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
         df["_MES_NUM"] = df["_DATA_DT"].dt.month
 
         invalid = df[df["_DATA_DT"].isna()].copy()
@@ -216,32 +217,45 @@ def baixar_xlsx(sheet_id: str, cache_bust: int = 0) -> io.BytesIO:
 
 @st.cache_data(ttl=300)
 def carregar_dados(sheet_id: str, refresh_token: int):
+    """
+    Leitura robusta: não quebra se existirem abas com poucas linhas/vazias.
+    """
     arquivo = baixar_xlsx(sheet_id, cache_bust=refresh_token)
     xls = pd.ExcelFile(arquivo, engine="openpyxl")
 
     dfs = {}
     for sheet in xls.sheet_names:
         df_raw = xls.parse(sheet, header=None).dropna(axis=1, how="all")
+        n_rows = len(df_raw)
 
-        header_idx = 2
-        for idx, row in df_raw.head(25).iterrows():
+        if n_rows == 0:
+            dfs[sheet] = pd.DataFrame()
+            continue
+
+        header_idx = 2 if n_rows > 3 else 0
+
+        for idx, row in df_raw.head(min(25, n_rows)).iterrows():
             vals = [str(x).strip().upper() for x in row.dropna().values]
             if ("NOME" in vals) or ("OCORRÊNCIAS" in vals) or ("OCORRÊNCIA" in vals):
-                header_idx = idx
-                break
+                header_idx = int(idx); break
             if ("TIPO" in vals) and ("DATA" in vals) and ("LOCAL" in vals):
-                header_idx = idx
-                break
+                header_idx = int(idx); break
             if ("PERÍODO" in vals) and ("STATUS" in vals):
-                header_idx = idx
-                break
+                header_idx = int(idx); break
 
-        df = xls.parse(sheet, header=header_idx).dropna(axis=1, how="all")
+        header_idx = max(0, min(int(header_idx), n_rows - 1))
+
+        try:
+            df = xls.parse(sheet, header=header_idx).dropna(axis=1, how="all")
+        except ValueError:
+            df = xls.parse(sheet, header=0).dropna(axis=1, how="all")
+
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
+
     try:
         data_val = raw.iloc[7, 28]  # AC8
         if isinstance(data_val, (pd.Timestamp, datetime.datetime, datetime.date)):
@@ -252,6 +266,49 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         data_atual = "não localizada"
 
     return dfs, data_atual
+
+# ==========================================================
+# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP)
+# ==========================================================
+def detalhamento_por_mes(dfs, aba: str):
+    if aba not in dfs:
+        st.error(f"Aba '{aba}' não encontrada.")
+        return
+
+    df = dfs[aba].copy()
+    df.rename(columns={"ENDERECO": "LOCAL", "COP": "BOU"}, inplace=True)
+
+    if aba.upper() == "CVP":
+        colunas_exibir = ["TIPO", "DATA", "HORA", "LOCAL", "INSTRUMENTO", "BOU PC"]
+        chave_dropna = "TIPO"
+    else:
+        colunas_exibir = ["NOME", "IDADE", "DATA", "LOCAL", "MEIO EMPREGADO", "BOU"]
+        chave_dropna = "NOME"
+
+    colunas_presentes = [c for c in colunas_exibir if c in df.columns]
+
+    if "DATA" in df.columns:
+        s = _limpar_data_series(df["DATA"])
+        df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["_MES_NUM"] = df["_DATA_DT"].dt.month
+    else:
+        df["_DATA_DT"] = pd.NaT
+        df["_MES_NUM"] = pd.NA
+
+    if chave_dropna in df.columns:
+        df = df.dropna(subset=[chave_dropna])
+
+    tabs = st.tabs([m.title() for m in MESES])
+    for i, _ in enumerate(MESES, start=1):
+        with tabs[i-1]:
+            dfm = df[df["_MES_NUM"] == i].copy()
+            dfm = dfm.drop(columns=["_DATA_DT","_MES_NUM"], errors="ignore")
+
+            if dfm.empty:
+                st.info("Sem registros neste mês.")
+            else:
+                st.dataframe(dfm[colunas_presentes].reset_index(drop=True), use_container_width=True,
+                             height=altura_df(len(dfm), max_h=520), hide_index=True)
 
 # ==========================================================
 # GRUPO (comparativo) + % + STATUS colorido (cores vivas)
@@ -338,7 +395,6 @@ def main():
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
-    # Localidade
     st.write("")
     cL, cC, cR = st.columns([1, 2, 1])
     with cC:
@@ -377,31 +433,6 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    # Gráfico Anual
-    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("GRÁFICO POR OCORRÊNCIA", use_container_width=True):
-            if not selecionadas:
-                st.warning("Selecione pelo menos uma ocorrência.")
-            else:
-                grafico_por_ocorrencia(df_loc, selecionadas, planilha)
-    with b2:
-        if st.button("GRÁFICO ANUAL", use_container_width=True):
-            grafico_anual_totais(df_loc, planilha)
-
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
-    # Gráfico Mensal
-    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c2:
-        mes = st.selectbox(" ", MESES, label_visibility="collapsed")
-        if st.button("GERAR GRÁFICO MENSAL", use_container_width=True):
-            grafico_mensal(df_loc, mes, planilha)
-
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
     # ======================================================
     # DADOS DAS OCORRÊNCIAS
     # ======================================================
@@ -436,7 +467,7 @@ def main():
         detalhamento_por_mes(dfs, aba_sel)
 
     # ======================================================
-    # DETERMINAÇÕES E ORIENTAÇÕES
+    # DETERMINAÇÕES E ORIENTAÇÕES (somente botões por enquanto)
     # ======================================================
     st.markdown("<hr/>", unsafe_allow_html=True)
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES E ORIENTAÇÕES</div>", unsafe_allow_html=True)
@@ -456,11 +487,7 @@ def main():
             st.session_state["aba_p3"] = ABA_P3_VISITAS
 
     st.write("")
-    aba_p3_sel = st.session_state["aba_p3"]
-    if aba_p3_sel not in dfs:
-        st.error(f"Aba '{aba_p3_sel}' não encontrada na planilha.")
-    else:
-        exibir_aba_simples_com_mes(dfs[aba_p3_sel], aba_p3_sel)
+    st.info(f"Selecionado: **{st.session_state['aba_p3']}**. (Vinculação com a planilha será feita depois.)")
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

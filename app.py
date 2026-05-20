@@ -186,6 +186,13 @@ def tabela_resumo_com_detalhes(
     key_prefix: str,
     highlight_mask: pd.Series | None = None
 ):
+    """
+    - Mostra tabela resumo (colunas curtas)
+    - Preferência: seleção por clique na linha (sem selectbox)
+    - Fallback: selectbox (caso Streamlit não suporte seleção)
+    - Mostra colunas longas completas em text_area (sem cortar)
+    - highlight_mask: True pinta a linha na tabela resumo (azul claro)
+    """
     if df is None or df.empty:
         st.info("Sem registros neste mês.")
         return
@@ -194,32 +201,64 @@ def tabela_resumo_com_detalhes(
     cols_resumo = resolve_cols(df_show, cols_resumo_canon)
     cols_detalhe = resolve_cols(df_show, cols_detalhe_canon)
 
-    if not cols_resumo:
-        st.dataframe(df_show, use_container_width=True, height=altura_df(len(df_show), max_h=420), hide_index=True)
-    else:
-        df_resumo = df_show[cols_resumo].copy()
+    # Monta tabela resumo
+    df_resumo = df_show[cols_resumo].copy() if cols_resumo else df_show.copy()
 
-        if highlight_mask is not None:
-            hm = highlight_mask.reset_index(drop=True)
+    # Aplica highlight (PRIORIDADE etc.)
+    use_styler = False
+    if highlight_mask is not None:
+        hm = highlight_mask.reset_index(drop=True)
 
-            def _style_row(row):
-                if bool(hm.iloc[row.name]):
-                    return ["background-color:#BBDEFB; color:#000000; font-weight:700;"] * len(row)
-                return [""] * len(row)
+        def _style_row(row):
+            if bool(hm.iloc[row.name]):
+                return ["background-color:#BBDEFB; color:#000000; font-weight:700;"] * len(row)
+            return [""] * len(row)
 
-            styler = df_resumo.style.set_properties(**{"text-align":"center"}).hide(axis="index")
-            styler = styler.apply(_style_row, axis=1)
-            st.dataframe(styler, use_container_width=True, height=altura_df(len(df_resumo), max_h=420), hide_index=True)
-        else:
-            st.dataframe(df_resumo, use_container_width=True, height=altura_df(len(df_resumo), max_h=420), hide_index=True)
+        styler = df_resumo.style.set_properties(**{"text-align": "center"}).hide(axis="index")
+        styler = styler.apply(_style_row, axis=1)
+        use_styler = True
 
-    sel = st.selectbox(
-        "Ver detalhes do registro:",
-        options=list(df_show.index),
-        format_func=lambda i: label_func(df_show, i),
-        key=f"{key_prefix}_sel"
-    )
+    # ============================
+    # TENTAR SELEÇÃO POR CLIQUE
+    # ============================
+    sel = None
+    try:
+        state = st.dataframe(
+            styler if use_styler else df_resumo,
+            use_container_width=True,
+            height=altura_df(len(df_resumo), max_h=420),
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"{key_prefix}_tbl",
+        )
+        rows = getattr(getattr(state, "selection", None), "rows", None)
+        if rows:
+            sel = int(rows[0])
+    except TypeError:
+        # Streamlit antigo (não aceita on_select/selection_mode)
+        st.dataframe(
+            styler if use_styler else df_resumo,
+            use_container_width=True,
+            height=altura_df(len(df_resumo), max_h=420),
+            hide_index=True,
+        )
 
+    # ============================
+    # FALLBACK: SELECTBOX
+    # ============================
+    if sel is None:
+        st.caption("Clique em uma linha (se disponível) ou selecione abaixo para ver detalhes.")
+        sel = st.selectbox(
+            "Ver detalhes do registro:",
+            options=list(df_show.index),
+            format_func=lambda i: label_func(df_show, i),
+            key=f"{key_prefix}_sel",
+        )
+
+    # ============================
+    # DETALHES (TEXTO COMPLETO)
+    # ============================
     if cols_detalhe:
         st.markdown("**DETALHES (texto completo)**")
         for c in cols_detalhe:
@@ -229,8 +268,9 @@ def tabela_resumo_com_detalhes(
                 c,
                 value=txt,
                 height=160 if len(txt) < 250 else 240,
-                key=f"{key_prefix}_{c}_{sel}"
+                key=f"{key_prefix}_{c}_{sel}",
             )
+
 
 # ==========================================================
 # LOGIN

@@ -6,7 +6,6 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import re
-import html as _html
 
 # ==========================================================
 # CONFIG
@@ -37,7 +36,7 @@ ABA_P3_VISITAS_SHEET = "VISITAS"
 st.set_page_config(page_title="Ferramenta para Análise de Ocorrências", layout="wide")
 
 st.markdown(
-    r"""
+    """
 <style>
 .center-title {text-align:center; font-weight:700; font-size:28px; margin-top:0.25rem;}
 .center-sub   {text-align:center; font-weight:700; font-size:18px; margin-top:-0.25rem;}
@@ -46,7 +45,7 @@ hr { border: none; border-top: 1px solid #cfcfcf; margin: 1.2rem 0; }
 
 div[data-testid="stCheckbox"] label { font-size: 13px; }
 
-/* centralizar tabelas (st.dataframe) */
+/* centralizar tabelas */
 div[data-testid="stDataFrame"] * { text-align: center !important; }
 div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th { text-align: center !important; }
 button[data-baseweb="tab"] { justify-content: center; }
@@ -58,16 +57,6 @@ div.stButton > button {
   line-height: 1.15;
   text-align: center;
 }
-
-/* tabela HTML (EVENTOS): quebra de linha real */
-.table-wrap {max-height: 650px; overflow-y: auto; border: 1px solid #e5e5e5; border-radius: 8px;}
-.tbl {width: 100%; border-collapse: collapse; table-layout: fixed;}
-.tbl th, .tbl td {border-bottom: 1px solid #f0f0f0; padding: 10px 8px; vertical-align: top;}
-.tbl th {background: #fafafa; font-weight: 700;}
-.tbl td {white-space: normal; word-break: break-word;}
-.tbl td.center, .tbl th.center {text-align: center;}
-.tbl td.left, .tbl th.left {text-align: left;}
-.rowprio {background: #90CAF9;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -125,10 +114,15 @@ def _has_month_year_token(v: str) -> bool:
 def _remove_acentos_upper(s: str) -> str:
     s = s.upper()
     return (
-        s.replace("Á", "A").replace("Ã", "A").replace("Â", "A")
-        .replace("É", "E").replace("Ê", "E")
+        s.replace("Á", "A")
+        .replace("Ã", "A")
+        .replace("Â", "A")
+        .replace("É", "E")
+        .replace("Ê", "E")
         .replace("Í", "I")
-        .replace("Ó", "O").replace("Õ", "O").replace("Ô", "O")
+        .replace("Ó", "O")
+        .replace("Õ", "O")
+        .replace("Ô", "O")
         .replace("Ú", "U")
         .replace("Ç", "C")
     )
@@ -136,12 +130,32 @@ def _remove_acentos_upper(s: str) -> str:
 
 def _mes_para_nome_pt(token_mes: str) -> str:
     nomes = {
-        1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL", 5: "MAIO", 6: "JUNHO",
-        7: "JULHO", 8: "AGOSTO", 9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO"
+        1: "JANEIRO",
+        2: "FEVEREIRO",
+        3: "MARÇO",
+        4: "ABRIL",
+        5: "MAIO",
+        6: "JUNHO",
+        7: "JULHO",
+        8: "AGOSTO",
+        9: "SETEMBRO",
+        10: "OUTUBRO",
+        11: "NOVEMBRO",
+        12: "DEZEMBRO",
     }
     abrev = {
-        "JAN": "JANEIRO", "FEV": "FEVEREIRO", "MAR": "MARÇO", "ABR": "ABRIL", "MAI": "MAIO", "JUN": "JUNHO",
-        "JUL": "JULHO", "AGO": "AGOSTO", "SET": "SETEMBRO", "OUT": "OUTUBRO", "NOV": "NOVEMBRO", "DEZ": "DEZEMBRO"
+        "JAN": "JANEIRO",
+        "FEV": "FEVEREIRO",
+        "MAR": "MARÇO",
+        "ABR": "ABRIL",
+        "MAI": "MAIO",
+        "JUN": "JUNHO",
+        "JUL": "JULHO",
+        "AGO": "AGOSTO",
+        "SET": "SETEMBRO",
+        "OUT": "OUTUBRO",
+        "NOV": "NOVEMBRO",
+        "DEZ": "DEZEMBRO",
     }
     t = str(token_mes).strip()
     if t.isdigit():
@@ -182,53 +196,11 @@ def detectar_mes_grupo(dfs) -> str:
     return "MÊS"
 
 
-def _render_html_table(df_disp: pd.DataFrame, highlight_mask: pd.Series | None, wrap_left_cols: set[str]):
-    cols = [str(c).strip().upper() for c in df_disp.columns]
-    df_disp = df_disp.copy()
-    df_disp.columns = cols
-
-    if highlight_mask is None:
-        highlight_mask = pd.Series([False] * len(df_disp))
-
-    def esc(x) -> str:
-        if pd.isna(x):
-            return ""
-        return _html.escape(str(x))
-
-    ths = []
-    for c in cols:
-        cls = "center"
-        if c in wrap_left_cols:
-            cls = "left"
-        ths.append(f'<th class="{cls}">{esc(c)}</th>')
-    thead = "<tr>" + "".join(ths) + "</tr>"
-
-    trs = []
-    for i, row in enumerate(df_disp.itertuples(index=False, name=None)):
-        row_cls = "rowprio" if bool(highlight_mask.iloc[i]) else ""
-        tds = []
-        for c, val in zip(cols, row):
-            cls = "center"
-            if c in wrap_left_cols:
-                cls = "left"
-            tds.append(f'<td class="{cls}">{esc(val)}</td>')
-        trs.append(f'<tr class="{row_cls}">' + "".join(tds) + "</tr>")
-
-    html_table = f"""
-<div class="table-wrap">
-  <table class="tbl">
-    <thead>{thead}</thead>
-    <tbody>{"".join(trs)}</tbody>
-  </table>
-</div>
-"""
-    st.markdown(html_table, unsafe_allow_html=True)
-
-
-# ==========================================================
-# EXIBIÇÕES (por mês / eventos / visitas)
-# ==========================================================
 def exibir_por_mes(df: pd.DataFrame, titulo: str, data_col: str = "DATA"):
+    """
+    Exibe por mês (Jan-Dez) baseado em data_col.
+    - Sem "data indefinida" como aba: vira alerta com expander.
+    """
     st.markdown(f"<div class='center' style='font-weight:600;'>{titulo}</div>", unsafe_allow_html=True)
 
     if df is None or df.empty:
@@ -241,8 +213,7 @@ def exibir_por_mes(df: pd.DataFrame, titulo: str, data_col: str = "DATA"):
 
     if data_col not in df.columns:
         st.info("Sem coluna DATA para organizar por mês.")
-        st.dataframe(df.reset_index(drop=True), use_container_width=True,
-                     height=altura_df(len(df), max_h=650), hide_index=True)
+        st.dataframe(df.reset_index(drop=True), use_container_width=True, height=altura_df(len(df), max_h=650), hide_index=True)
         return
 
     s = _limpar_data_series(df[data_col])
@@ -254,8 +225,7 @@ def exibir_por_mes(df: pd.DataFrame, titulo: str, data_col: str = "DATA"):
         st.warning(f"⚠️ {len(invalid)} registro(s) com DATA vazia/inválida.")
         with st.expander("Ver registros com DATA inválida"):
             show_bad = invalid.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore")
-            st.dataframe(show_bad.reset_index(drop=True), use_container_width=True,
-                         height=altura_df(len(show_bad), max_h=520), hide_index=True)
+            st.dataframe(show_bad.reset_index(drop=True), use_container_width=True, height=altura_df(len(show_bad), max_h=520), hide_index=True)
 
     df_ok = df[df["_DATA_DT"].notna()].copy().sort_values("_DATA_DT")
 
@@ -263,27 +233,20 @@ def exibir_por_mes(df: pd.DataFrame, titulo: str, data_col: str = "DATA"):
     for i, _ in enumerate(MESES, start=1):
         with tabs[i - 1]:
             dfm = df_ok[df_ok["_MES_NUM"] == i].copy()
+            dfm = dfm.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore")
             if dfm.empty:
                 st.info("Sem registros neste mês.")
-                continue
-
-            # formata DATA (para não aparecer 00:00:00)
-            if data_col in dfm.columns:
-                dfm[data_col] = dfm["_DATA_DT"].dt.strftime("%d/%m/%Y")
-
-            dfm = dfm.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore")
-            st.dataframe(dfm.reset_index(drop=True), use_container_width=True,
-                         height=altura_df(len(dfm), max_h=520), hide_index=True)
+            else:
+                st.dataframe(dfm.reset_index(drop=True), use_container_width=True, height=altura_df(len(dfm), max_h=520), hide_index=True)
 
 
 def exibir_eventos_por_mes(df_eventos: pd.DataFrame):
     """
     EVENTOS:
     - por mês (DATA)
-    - mostra GUARNIÇÃO
-    - NÃO mostra PRIORIDADE
-    - se PRIORIDADE == SIM -> linha azul
-    - LOCAL e PROCEDIMENTO quebram linha e expandem verticalmente (HTML)
+    - 'GUARNIÇÃO' aparece
+    - 'PRIORIDADE' NÃO aparece
+    - se PRIORIDADE == SIM -> linha destacada em azul
     """
     st.markdown("<div class='center' style='font-weight:600;'>EVENTOS</div>", unsafe_allow_html=True)
 
@@ -297,8 +260,7 @@ def exibir_eventos_por_mes(df_eventos: pd.DataFrame):
 
     if "DATA" not in df.columns:
         st.info("Sem coluna DATA para organizar por mês.")
-        st.dataframe(df.reset_index(drop=True), use_container_width=True,
-                     height=altura_df(len(df), max_h=650), hide_index=True)
+        st.dataframe(df.reset_index(drop=True), use_container_width=True, height=altura_df(len(df), max_h=650), hide_index=True)
         return
 
     s = _limpar_data_series(df["DATA"])
@@ -310,8 +272,7 @@ def exibir_eventos_por_mes(df_eventos: pd.DataFrame):
         st.warning(f"⚠️ {len(invalid)} registro(s) com DATA vazia/inválida.")
         with st.expander("Ver registros com DATA inválida"):
             show_bad = invalid.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore")
-            st.dataframe(show_bad.reset_index(drop=True), use_container_width=True,
-                         height=altura_df(len(show_bad), max_h=520), hide_index=True)
+            st.dataframe(show_bad.reset_index(drop=True), use_container_width=True, height=altura_df(len(show_bad), max_h=520), hide_index=True)
 
     df_ok = df[df["_DATA_DT"].notna()].copy().sort_values("_DATA_DT")
 
@@ -323,7 +284,6 @@ def exibir_eventos_por_mes(df_eventos: pd.DataFrame):
                 st.info("Sem registros neste mês.")
                 continue
 
-            # PRIORIDADE (pinta linha azul se SIM)
             if "PRIORIDADE" in dfm_full.columns:
                 mask = (
                     dfm_full["PRIORIDADE"]
@@ -336,19 +296,20 @@ def exibir_eventos_por_mes(df_eventos: pd.DataFrame):
             else:
                 mask = pd.Series([False] * len(dfm_full), index=dfm_full.index)
 
-            dfm_disp = dfm_full.drop(columns=["_MES_NUM"], errors="ignore").copy()
-
-            # DATA formatada
-            if "DATA" in dfm_disp.columns:
-                dfm_disp["DATA"] = dfm_disp["_DATA_DT"].dt.strftime("%d/%m/%Y")
-
-            # remove colunas auxiliares e PRIORIDADE (não exibir)
-            dfm_disp = dfm_disp.drop(columns=["_DATA_DT"], errors="ignore")
+            # NÃO exibir PRIORIDADE, mas usar para pintar
+            dfm_disp = dfm_full.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore")
             dfm_disp = dfm_disp.drop(columns=["PRIORIDADE"], errors="ignore").reset_index(drop=True)
             mask_reset = mask.reset_index(drop=True)
 
-            wrap_left = {"LOCAL", "PROCEDIMENTO"}
-            _render_html_table(dfm_disp, highlight_mask=mask_reset, wrap_left_cols=wrap_left)
+            def _row_style(row):
+                if bool(mask_reset.iloc[row.name]):
+                    return ["background-color:#90CAF9; color:#000000; font-weight:700;"] * len(row)
+                return [""] * len(row)
+
+            styler = dfm_disp.style.set_properties(**{"text-align": "center"}).hide(axis="index")
+            styler = styler.apply(_row_style, axis=1)
+
+            st.dataframe(styler, use_container_width=True, height=altura_df(len(dfm_disp), max_h=520), hide_index=True)
 
 
 # ==========================================================
@@ -379,6 +340,10 @@ def baixar_xlsx(sheet_id: str, cache_bust: int = 0) -> io.BytesIO:
 
 @st.cache_data(ttl=300)
 def carregar_dados(sheet_id: str, refresh_token: int):
+    """
+    Leitura robusta + detecção de cabeçalho para EVENTOS/VISITAS/ORIENTACOES.
+    Não quebra se existirem abas vazias/poucas linhas.
+    """
     arquivo = baixar_xlsx(sheet_id, cache_bust=refresh_token)
     xls = pd.ExcelFile(arquivo, engine="openpyxl")
 
@@ -397,23 +362,35 @@ def carregar_dados(sheet_id: str, refresh_token: int):
             vals = [str(x).strip().upper() for x in row.dropna().values]
             vals_set = set(vals)
 
+            # Ocorrências
             if ("NOME" in vals_set) or ("OCORRÊNCIAS" in vals_set) or ("OCORRÊNCIA" in vals_set):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
+            # CVP (TIPO/DATA/LOCAL)
             if ("TIPO" in vals_set) and ("DATA" in vals_set) and ("LOCAL" in vals_set):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
+            # GRUPO
             if (("PERÍODO" in vals_set) or ("PERIODO" in vals_set)) and ("STATUS" in vals_set):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
+            # EVENTOS (DATA + EVENTO)
             if ("DATA" in vals_set) and ("EVENTO" in vals_set):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
+            # ORIENTACOES (DATA + ORIENTACOES)
             if ("DATA" in vals_set) and (("ORIENTAÇÕES" in vals_set) or ("ORIENTACOES" in vals_set)):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
+            # VISITAS (ORIENTADO + ENDERECO)
             if ("ORIENTADO" in vals_set) and (("ENDEREÇO" in vals_set) or ("ENDERECO" in vals_set)):
-                header_idx = int(idx); break
+                header_idx = int(idx)
+                break
 
         header_idx = max(0, min(int(header_idx), n_rows - 1))
 
@@ -425,6 +402,7 @@ def carregar_dados(sheet_id: str, refresh_token: int):
         df.columns = df.columns.astype(str).str.strip().str.upper()
         dfs[sheet] = df
 
+    # Data de atualização (AC8)
     sheet_ref = "1ª CPM-I" if "1ª CPM-I" in xls.sheet_names else xls.sheet_names[0]
     raw = xls.parse(sheet_ref, header=None)
     try:
@@ -447,10 +425,13 @@ def grafico_por_ocorrencia(df, selecionadas, titulo_prefixo):
         df_o = df[df["OCORRÊNCIAS"] == ocorrencia]
         if df_o.empty:
             continue
+
         d25 = df_o.iloc[:, 1::2].values.flatten()[:12]
         d26 = df_o.iloc[:, 2::2].values.flatten()[:12]
+
         df_p = pd.DataFrame({"2025": d25, "2026": d26}, index=MESES).fillna(0)
         df_p.loc["TOTAL"] = df_p.sum()
+
         fig = plt.figure(figsize=(9, 5))
         ax = df_p.plot(kind="bar", ax=plt.gca(), title=f"{ocorrencia} - {titulo_prefixo}")
         for c in ax.containers:
@@ -468,11 +449,13 @@ def grafico_anual_totais(df, titulo_prefixo):
     reg = []
     for _, r in df.dropna(subset=["OCORRÊNCIAS"]).iterrows():
         df_l = df[df["OCORRÊNCIAS"] == r["OCORRÊNCIAS"]].head(1)
-        reg.append({
-            "OC": str(r["OCORRÊNCIAS"]),
-            "2025": _total(df_l, slice(1, None, 2)),
-            "2026": _total(df_l, slice(2, None, 2))
-        })
+        reg.append(
+            {
+                "OC": str(r["OCORRÊNCIAS"]),
+                "2025": _total(df_l, slice(1, None, 2)),
+                "2026": _total(df_l, slice(2, None, 2)),
+            }
+        )
 
     df_t = pd.DataFrame(reg)
 
@@ -521,7 +504,7 @@ def grafico_mensal(df, mes, titulo_prefixo):
 
 
 # ==========================================================
-# DETALHAMENTO (CVLI/TENTATIVA/CVP)
+# DETALHAMENTO por mês (CVLI/TENTATIVA/CVP)
 # ==========================================================
 def detalhamento_por_mes(dfs, aba: str):
     if aba not in dfs:
@@ -566,7 +549,7 @@ def detalhamento_por_mes(dfs, aba: str):
 
 
 # ==========================================================
-# GRUPO
+# GRUPO (comparativo) + % + STATUS colorido (cores vivas)
 # ==========================================================
 def detalhamento_grupo(dfs):
     if ABA_GRUPO not in dfs:
@@ -651,57 +634,8 @@ def main():
     st.markdown("<div class='center-title'>Ferramenta para Análise de Ocorrências</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
 
-    # ======================================================
-    # PRIMEIRO: DETERMINAÇÕES E OBSERVAÇÕES
-    # ======================================================
-    st.markdown("<hr/>", unsafe_allow_html=True)
-    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES E OBSERVAÇÕES</div>", unsafe_allow_html=True)
-
-    if "aba_p3" not in st.session_state:
-        st.session_state["aba_p3"] = "DETERMINACOES"
-
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        if st.button("DETERMINAÇÕES", use_container_width=True):
-            st.session_state["aba_p3"] = "DETERMINACOES"
-    with p2:
-        if st.button("EVENTOS", use_container_width=True):
-            st.session_state["aba_p3"] = "EVENTOS"
-    with p3:
-        if st.button("VISITAS", use_container_width=True):
-            st.session_state["aba_p3"] = "VISITAS"
-
+    # Localidade
     st.write("")
-    if st.session_state["aba_p3"] == "DETERMINACOES":
-        sh = ABA_P3_DETERMINACOES_SHEET
-        if sh not in dfs or dfs[sh].empty:
-            st.info(f"Sem dados na aba **{sh}**.")
-        else:
-            exibir_por_mes(dfs[sh], titulo="DETERMINAÇÕES", data_col="DATA")
-
-    elif st.session_state["aba_p3"] == "EVENTOS":
-        sh = ABA_P3_EVENTOS_SHEET
-        if sh not in dfs or dfs[sh].empty:
-            st.info(f"Sem dados na aba **{sh}**.")
-        else:
-            exibir_eventos_por_mes(dfs[sh])
-
-    else:
-        sh = ABA_P3_VISITAS_SHEET
-        st.markdown("<div class='center' style='font-weight:600;'>VISITAS</div>", unsafe_allow_html=True)
-        if sh not in dfs or dfs[sh].empty:
-            st.info(f"Sem dados na aba **{sh}**.")
-        else:
-            dfv = dfs[sh].copy().dropna(axis=1, how="all").dropna(how="all")
-            dfv = dfv.loc[:, [c for c in dfv.columns if not _is_unnamed(c)]].copy()
-            st.dataframe(dfv.reset_index(drop=True), use_container_width=True,
-                         height=altura_df(len(dfv), max_h=650), hide_index=True)
-
-    # ======================================================
-    # DEPOIS: DEMAIS FUNÇÕES
-    # ======================================================
-    st.markdown("<hr/>", unsafe_allow_html=True)
-
     _, cC, _ = st.columns([1, 2, 1])
     with cC:
         localidade = st.selectbox("Selecione a localidade:", LOCALIDADES_UI)
@@ -718,11 +652,13 @@ def main():
 
     ocorrencias = df_loc["OCORRÊNCIAS"].dropna().drop_duplicates().astype(str).tolist()
 
+    # seleção persistente por planilha
     if "sel_oc_by_sheet" not in st.session_state:
         st.session_state["sel_oc_by_sheet"] = {}
     if planilha not in st.session_state["sel_oc_by_sheet"]:
         st.session_state["sel_oc_by_sheet"][planilha] = set()
 
+    # checkboxes em 4 colunas
     st.write("")
     cols = st.columns(4)
     for i, oc in enumerate(ocorrencias):
@@ -739,6 +675,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # GRÁFICO ANUAL
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Anual: 2025 vs 2026</div>", unsafe_allow_html=True)
     b1, b2 = st.columns(2)
     with b1:
@@ -753,6 +690,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # GRÁFICO MENSAL
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>Gráfico Mensal:</div>", unsafe_allow_html=True)
     _, c2, _ = st.columns([1, 1, 1])
     with c2:
@@ -762,6 +700,7 @@ def main():
 
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # DADOS DAS OCORRÊNCIAS
     st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DADOS DAS OCORRÊNCIAS</div>", unsafe_allow_html=True)
 
     if "aba_dados" not in st.session_state:
@@ -786,13 +725,60 @@ def main():
     st.write("")
     aba_sel = st.session_state["aba_dados"]
     if aba_sel == ABA_GRUPO:
-        st.markdown(f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>",
+            unsafe_allow_html=True,
+        )
         detalhamento_grupo(dfs)
     else:
         st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
         detalhamento_por_mes(dfs, aba_sel)
 
+    # DETERMINAÇÕES E ORIENTAÇÕES
+    st.markdown("<hr/>", unsafe_allow_html=True)
+    st.markdown("<div class='center' style='font-weight:700; font-size:18px;'>DETERMINAÇÕES E ORIENTAÇÕES</div>", unsafe_allow_html=True)
+
+    if "aba_p3" not in st.session_state:
+        st.session_state["aba_p3"] = "DETERMINACOES"
+
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        if st.button("DETERMINAÇÕES", use_container_width=True):
+            st.session_state["aba_p3"] = "DETERMINACOES"
+    with p2:
+        if st.button("EVENTOS", use_container_width=True):
+            st.session_state["aba_p3"] = "EVENTOS"
+    with p3:
+        if st.button("VISITAS", use_container_width=True):
+            st.session_state["aba_p3"] = "VISITAS"
+
+    st.write("")
+    if st.session_state["aba_p3"] == "DETERMINACOES":
+        sheet_name = ABA_P3_DETERMINACOES_SHEET
+        if sheet_name not in dfs or dfs[sheet_name].empty:
+            st.info(f"Sem dados na aba **{sheet_name}**.")
+        else:
+            exibir_por_mes(dfs[sheet_name], titulo="DETERMINAÇÕES", data_col="DATA")
+
+    elif st.session_state["aba_p3"] == "EVENTOS":
+        sheet_name = ABA_P3_EVENTOS_SHEET
+        if sheet_name not in dfs or dfs[sheet_name].empty:
+            st.info(f"Sem dados na aba **{sheet_name}**.")
+        else:
+            exibir_eventos_por_mes(dfs[sheet_name])
+
+    else:
+        sheet_name = ABA_P3_VISITAS_SHEET
+        st.markdown("<div class='center' style='font-weight:600;'>VISITAS</div>", unsafe_allow_html=True)
+        if sheet_name not in dfs or dfs[sheet_name].empty:
+            st.info(f"Sem dados na aba **{sheet_name}**.")
+        else:
+            dfv = dfs[sheet_name].copy().dropna(axis=1, how="all").dropna(how="all")
+            dfv = dfv.loc[:, [c for c in dfv.columns if not _is_unnamed(c)]].copy()
+            st.dataframe(dfv.reset_index(drop=True), use_container_width=True, height=altura_df(len(dfv), max_h=650), hide_index=True)
+
     st.caption(f"Dados atualizados em: {data_atual}")
+
 
 if __name__ == "__main__":
     main()

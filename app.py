@@ -637,8 +637,8 @@ def p3_eventos(dfs):
 
             tabela_resumo_com_detalhes(
                 df=dfm_clean,
-                cols_resumo_canon=["DATA", "HORÁRIO", "LOCAL", "CIDADE", "GUARNIÇÃO"],
-                cols_detalhe_canon=["EVENTO", "LOCAL", "PROCEDIMENTO"],
+                cols_resumo_canon=["DATA", "LOCAL", "CIDADE", "GUARNIÇÃO"],
+                cols_detalhe_canon=["HORÁRIO", "EVENTO", "LOCAL", "PROCEDIMENTO"],
                 label_func=_label,
                 key_prefix=f"p3_evt_{mes_idx}",
                 highlight_mask=mask_reset

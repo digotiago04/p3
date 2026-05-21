@@ -24,7 +24,7 @@ MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}
 
 # Centro aproximado da área de atuação em Alagoas
 ALAGOAS_CENTER = [-9.80, -36.60]
-ALAGOAS_ZOOM = 8
+ALAGOAS_ZOOM = 7
 
 ABA_CVLI  = "CVLI"
 ABA_TENT  = "TENTATIVA"

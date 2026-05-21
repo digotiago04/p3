@@ -23,7 +23,7 @@ LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA D
 MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}
 
 # Centro aproximado da área de atuação em Alagoas
-ALAGOAS_CENTER = [-9.80, -36.60]
+ALAGOAS_CENTER = [-9.75, -36.65]
 ALAGOAS_ZOOM = 7
 
 ABA_CVLI  = "CVLI"
@@ -354,34 +354,29 @@ def _popup_ocorrencia(row: pd.Series) -> str:
 
 
 def criar_mapa_pontos(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str):
+    """
+    Mapa de pontos com abertura inicial fixa na região de Alagoas.
+    Não usa fit_bounds, pois isso pode aproximar demais quando os pontos estão muito concentrados.
+    """
     if df_map.empty:
         st.info("Sem coordenadas para exibir o mapa.")
         return
 
-    centro = [df_map[lat_col].mean(), df_map[lon_col].mean()]
-
-    # Se as coordenadas estiverem fora da faixa esperada, usa Alagoas como centro.
-    if not (-11 <= centro[0] <= -8 and -38 <= centro[1] <= -34):
-        centro = ALAGOAS_CENTER
-
     mapa = folium.Map(
-        location=centro,
+        location=ALAGOAS_CENTER,
         zoom_start=ALAGOAS_ZOOM,
         control_scale=True,
-        tiles="OpenStreetMap"
+        tiles="OpenStreetMap",
+        prefer_canvas=True,
     )
 
-    pontos_bounds = []
     for _, row in df_map.iterrows():
         lat = float(row[lat_col])
         lon = float(row[lon_col])
 
         # Mostra apenas pontos compatíveis com a região de Alagoas.
-        # Isso evita que uma coordenada digitada errada jogue o mapa para outro continente.
         if not (-11 <= lat <= -8 and -38 <= lon <= -34):
             continue
-
-        pontos_bounds.append([lat, lon])
 
         folium.CircleMarker(
             location=[lat, lon],
@@ -393,14 +388,16 @@ def criar_mapa_pontos(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str
             popup=folium.Popup(_popup_ocorrencia(row), max_width=350),
         ).add_to(mapa)
 
-    # Quando há apenas 1 ponto, NÃO usar fit_bounds, pois pode abrir o mapa muito afastado.
-    if len(pontos_bounds) > 1:
-        mapa.fit_bounds(pontos_bounds, padding=(30, 30))
-    elif len(pontos_bounds) == 1:
-        mapa.location = pontos_bounds[0]
-        mapa.options["zoom"] = 13
-
-    st_folium(mapa, use_container_width=True, height=550, key=key)
+    # IMPORTANTE:
+    # - key nova para limpar o estado antigo do mapa no Streamlit/browser.
+    # - returned_objects=[] evita retorno de estado de zoom/clique a cada interação.
+    st_folium(
+        mapa,
+        use_container_width=True,
+        height=550,
+        key=f"{key}_fixo_alagoas_v5",
+        returned_objects=[],
+    )
 
 
 def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):

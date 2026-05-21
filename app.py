@@ -6,6 +6,9 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import re
+import folium
+from folium.plugins import HeatMap
+from streamlit_folium import st_folium
 
 # ==========================================================
 # CONFIG
@@ -41,6 +44,8 @@ COL_ALIASES = {
     "PROCEDIMENTO": ["PROCEDIMENTO"],
     "PRIORIDADE": ["PRIORIDADE"],
     "ORIENTAÇÕES": ["ORIENTAÇÕES", "ORIENTACOES", "ORIENTAÇÔES", "ORIENTAÇÕES "],
+    "LATITUDE": ["LATITUDE", "LAT"],
+    "LONGITUDE": ["LONGITUDE", "LON", "LONG"],
 }
 
 # ==========================================================
@@ -270,6 +275,200 @@ def tabela_resumo_com_detalhes(
                 height=160 if len(txt) < 250 else 240,
                 key=f"{key_prefix}_{c}_{sel}",
             )
+
+
+
+# ==========================================================
+# MAPAS (CVLI / TENTATIVA)
+# ==========================================================
+def preparar_coordenadas(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None, str | None]:
+    """
+    Converte LATITUDE/LONGITUDE para número, aceitando vírgula ou ponto.
+    Registros sem coordenadas válidas são ignorados nos mapas.
+    """
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    lat_col = get_first_col(df, "LATITUDE")
+    lon_col = get_first_col(df, "LONGITUDE")
+
+    if not lat_col or not lon_col:
+        return pd.DataFrame(), lat_col, lon_col
+
+    df[lat_col] = (
+        df[lat_col]
+        .astype(str)
+        .str.strip()
+        .str.replace(",", ".", regex=False)
+    )
+    df[lon_col] = (
+        df[lon_col]
+        .astype(str)
+        .str.strip()
+        .str.replace(",", ".", regex=False)
+    )
+
+    df[lat_col] = pd.to_numeric(df[lat_col], errors="coerce")
+    df[lon_col] = pd.to_numeric(df[lon_col], errors="coerce")
+
+    df = df.dropna(subset=[lat_col, lon_col]).copy()
+
+    # Limite básico para evitar coordenadas inválidas
+    df = df[
+        df[lat_col].between(-90, 90) &
+        df[lon_col].between(-180, 180)
+    ].copy()
+
+    return df, lat_col, lon_col
+
+
+def _popup_ocorrencia(row: pd.Series) -> str:
+    def get(col):
+        val = row[col] if col in row.index else ""
+        if pd.isna(val):
+            return ""
+        return str(val)
+
+    campos = [
+        ("Nome", get("NOME")),
+        ("Idade", get("IDADE")),
+        ("Data", get("DATA")),
+        ("Local", get("LOCAL")),
+        ("Meio empregado", get("MEIO EMPREGADO")),
+        ("BOU", get("BOU")),
+    ]
+
+    linhas = [f"<b>{titulo}:</b> {valor}" for titulo, valor in campos if str(valor).strip()]
+    return "<br>".join(linhas)
+
+
+def criar_mapa_pontos(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str):
+    if df_map.empty:
+        st.info("Sem coordenadas para exibir o mapa.")
+        return
+
+    centro = [df_map[lat_col].mean(), df_map[lon_col].mean()]
+    mapa = folium.Map(location=centro, zoom_start=12, control_scale=True)
+
+    pontos_bounds = []
+    for _, row in df_map.iterrows():
+        lat = float(row[lat_col])
+        lon = float(row[lon_col])
+        pontos_bounds.append([lat, lon])
+
+        folium.CircleMarker(
+            location=[lat, lon],
+            radius=6,
+            color="#D32F2F",
+            fill=True,
+            fill_color="#D32F2F",
+            fill_opacity=0.75,
+            popup=folium.Popup(_popup_ocorrencia(row), max_width=350),
+        ).add_to(mapa)
+
+    if pontos_bounds:
+        mapa.fit_bounds(pontos_bounds)
+
+    st_folium(mapa, use_container_width=True, height=550, key=key)
+
+
+def criar_mapa_calor(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str):
+    if df_map.empty:
+        st.info("Sem coordenadas para exibir o mapa de calor.")
+        return
+
+    centro = [df_map[lat_col].mean(), df_map[lon_col].mean()]
+    mapa = folium.Map(location=centro, zoom_start=12, control_scale=True)
+
+    heat_data = df_map[[lat_col, lon_col]].dropna().values.tolist()
+
+    HeatMap(
+        heat_data,
+        radius=22,
+        blur=18,
+        min_opacity=0.35,
+    ).add_to(mapa)
+
+    if heat_data:
+        mapa.fit_bounds(heat_data)
+
+    st_folium(mapa, use_container_width=True, height=550, key=key)
+
+
+def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
+    """
+    Para CVLI e TENTATIVA:
+    - Aba Tabela: mantém detalhamento mensal.
+    - Aba Mapa de pontos: mostra pontos com popup.
+    - Aba Mapa de calor: mostra concentração.
+    """
+    if aba not in dfs:
+        st.error(f"Aba '{aba}' não encontrada.")
+        return
+
+    df = dfs[aba].copy()
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    df.rename(
+        columns={
+            "ENDEREÇO": "LOCAL",
+            "ENDERECO": "LOCAL",
+            "COP": "BOU",
+        },
+        inplace=True,
+    )
+
+    # Prepara datas para tabela e popup
+    if "DATA" in df.columns:
+        s = _limpar_data_series(df["DATA"])
+        df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["MES_NUM"] = df["DATA_DT"].dt.month
+        df["DATA"] = df["DATA_DT"].dt.strftime("%d/%m/%Y")
+        df["DATA"] = df["DATA"].fillna("")
+    else:
+        df["DATA_DT"] = pd.NaT
+        df["MES_NUM"] = pd.NA
+
+    abas = st.tabs(["Tabela", "Mapa de pontos", "Mapa de calor"])
+
+    with abas[0]:
+        # A tabela permanece como antes, organizada por mês
+        df_tabela = df.copy()
+        if aba.upper() == "CVP":
+            colunas_exibir = ["TIPO", "DATA", "HORA", "LOCAL", "INSTRUMENTO", "BOU PC"]
+            chave_dropna = "TIPO"
+        else:
+            colunas_exibir = ["NOME", "IDADE", "DATA", "LOCAL", "MEIO EMPREGADO", "BOU"]
+            chave_dropna = "NOME"
+
+        colunas_presentes = [c for c in colunas_exibir if c in df_tabela.columns]
+
+        if chave_dropna in df_tabela.columns:
+            df_tabela = df_tabela.dropna(subset=[chave_dropna])
+
+        tabs_meses = st.tabs([m.title() for m in MESES])
+        for i, _ in enumerate(MESES, start=1):
+            with tabs_meses[i - 1]:
+                dfm = df_tabela[df_tabela["MES_NUM"] == i].copy()
+                if dfm.empty:
+                    st.info("Sem registros neste mês.")
+                    continue
+
+                df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
+                st.dataframe(
+                    df_show,
+                    use_container_width=True,
+                    height=altura_df(len(df_show)),
+                    hide_index=True,
+                )
+
+    df_map, lat_col, lon_col = preparar_coordenadas(df)
+
+    with abas[1]:
+        criar_mapa_pontos(df_map, lat_col, lon_col, key=f"mapa_pontos_{aba}")
+
+    with abas[2]:
+        criar_mapa_calor(df_map, lat_col, lon_col, key=f"mapa_calor_{aba}")
 
 
 # ==========================================================
@@ -797,7 +996,10 @@ def main():
         detalhamento_grupo(dfs)
     else:
         st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)
-        detalhamento_por_mes_padrao(dfs, aba_sel)
+        if aba_sel in [ABA_CVLI, ABA_TENT]:
+            detalhamento_cvli_tentativa_com_mapa(dfs, aba_sel)
+        else:
+            detalhamento_por_mes_padrao(dfs, aba_sel)
 
     st.caption(f"Dados atualizados em: {data_atual}")
 

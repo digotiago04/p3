@@ -7,7 +7,6 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import re
 import folium
-from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 
 # ==========================================================
@@ -22,6 +21,10 @@ MESES = [
 
 LOCALIDADES_UI = ["1ª CPM/I", "SÃO MIGUEL DOS CAMPOS", "CAMPO ALEGRE", "BOCA DA MATA", "ANADIA", "ROTEIRO"]
 MAP_LOCALIDADE = {"1ª CPM/I": "1ª CPM-I"}
+
+# Centro aproximado da área de atuação em Alagoas
+ALAGOAS_CENTER = [-9.78, -36.09]
+ALAGOAS_ZOOM = 10
 
 ABA_CVLI  = "CVLI"
 ABA_TENT  = "TENTATIVA"
@@ -285,6 +288,11 @@ def preparar_coordenadas(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None, st
     """
     Converte LATITUDE/LONGITUDE para número, aceitando vírgula ou ponto.
     Registros sem coordenadas válidas são ignorados nos mapas.
+
+    Também trata casos comuns de exportação:
+    - vírgula decimal: -9,799889 -> -9.799889
+    - traço diferente: −36,10 -> -36.10
+    - longitude positiva por perda do sinal: 36.10 -> -36.10
     """
     df = df.copy()
     df.columns = df.columns.astype(str).str.strip().str.upper()
@@ -295,25 +303,28 @@ def preparar_coordenadas(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None, st
     if not lat_col or not lon_col:
         return pd.DataFrame(), lat_col, lon_col
 
-    df[lat_col] = (
-        df[lat_col]
-        .astype(str)
-        .str.strip()
-        .str.replace(",", ".", regex=False)
-    )
-    df[lon_col] = (
-        df[lon_col]
-        .astype(str)
-        .str.strip()
-        .str.replace(",", ".", regex=False)
-    )
+    def _to_num(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .str.strip()
+             .str.replace("−", "-", regex=False)
+             .str.replace("–", "-", regex=False)
+             .str.replace("—", "-", regex=False)
+             .str.replace(",", ".", regex=False),
+            errors="coerce"
+        )
 
-    df[lat_col] = pd.to_numeric(df[lat_col], errors="coerce")
-    df[lon_col] = pd.to_numeric(df[lon_col], errors="coerce")
+    df[lat_col] = _to_num(df[lat_col])
+    df[lon_col] = _to_num(df[lon_col])
+
+    # Se a longitude veio positiva, mas está na faixa esperada de Alagoas,
+    # corrige para oeste (negativa). Ex.: 36.104881 -> -36.104881
+    mask_lon_sem_sinal = df[lon_col].between(34, 39, inclusive="both")
+    df.loc[mask_lon_sem_sinal, lon_col] = -df.loc[mask_lon_sem_sinal, lon_col].abs()
 
     df = df.dropna(subset=[lat_col, lon_col]).copy()
 
-    # Limite básico para evitar coordenadas inválidas
+    # Limite básico para evitar coordenadas absurdas
     df = df[
         df[lat_col].between(-90, 90) &
         df[lon_col].between(-180, 180)
@@ -348,12 +359,28 @@ def criar_mapa_pontos(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str
         return
 
     centro = [df_map[lat_col].mean(), df_map[lon_col].mean()]
-    mapa = folium.Map(location=centro, zoom_start=12, control_scale=True)
+
+    # Se as coordenadas estiverem fora da faixa esperada, usa Alagoas como centro.
+    if not (-11 <= centro[0] <= -8 and -38 <= centro[1] <= -34):
+        centro = ALAGOAS_CENTER
+
+    mapa = folium.Map(
+        location=centro,
+        zoom_start=ALAGOAS_ZOOM,
+        control_scale=True,
+        tiles="OpenStreetMap"
+    )
 
     pontos_bounds = []
     for _, row in df_map.iterrows():
         lat = float(row[lat_col])
         lon = float(row[lon_col])
+
+        # Mostra apenas pontos compatíveis com a região de Alagoas.
+        # Isso evita que uma coordenada digitada errada jogue o mapa para outro continente.
+        if not (-11 <= lat <= -8 and -38 <= lon <= -34):
+            continue
+
         pontos_bounds.append([lat, lon])
 
         folium.CircleMarker(
@@ -366,31 +393,12 @@ def criar_mapa_pontos(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str
             popup=folium.Popup(_popup_ocorrencia(row), max_width=350),
         ).add_to(mapa)
 
-    if pontos_bounds:
-        mapa.fit_bounds(pontos_bounds)
-
-    st_folium(mapa, use_container_width=True, height=550, key=key)
-
-
-def criar_mapa_calor(df_map: pd.DataFrame, lat_col: str, lon_col: str, key: str):
-    if df_map.empty:
-        st.info("Sem coordenadas para exibir o mapa de calor.")
-        return
-
-    centro = [df_map[lat_col].mean(), df_map[lon_col].mean()]
-    mapa = folium.Map(location=centro, zoom_start=12, control_scale=True)
-
-    heat_data = df_map[[lat_col, lon_col]].dropna().values.tolist()
-
-    HeatMap(
-        heat_data,
-        radius=22,
-        blur=18,
-        min_opacity=0.35,
-    ).add_to(mapa)
-
-    if heat_data:
-        mapa.fit_bounds(heat_data)
+    # Quando há apenas 1 ponto, NÃO usar fit_bounds, pois pode abrir o mapa muito afastado.
+    if len(pontos_bounds) > 1:
+        mapa.fit_bounds(pontos_bounds, padding=(30, 30))
+    elif len(pontos_bounds) == 1:
+        mapa.location = pontos_bounds[0]
+        mapa.options["zoom"] = 13
 
     st_folium(mapa, use_container_width=True, height=550, key=key)
 
@@ -400,7 +408,6 @@ def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
     Para CVLI e TENTATIVA:
     - Aba Tabela: mantém detalhamento mensal.
     - Aba Mapa de pontos: mostra pontos com popup.
-    - Aba Mapa de calor: mostra concentração.
     """
     if aba not in dfs:
         st.error(f"Aba '{aba}' não encontrada.")
@@ -429,7 +436,7 @@ def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
         df["DATA_DT"] = pd.NaT
         df["MES_NUM"] = pd.NA
 
-    abas = st.tabs(["Tabela", "Mapa de pontos", "Mapa de calor"])
+    abas = st.tabs(["Tabela", "Mapa de pontos"])
 
     with abas[0]:
         # A tabela permanece como antes, organizada por mês
@@ -466,9 +473,6 @@ def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
 
     with abas[1]:
         criar_mapa_pontos(df_map, lat_col, lon_col, key=f"mapa_pontos_{aba}")
-
-    with abas[2]:
-        criar_mapa_calor(df_map, lat_col, lon_col, key=f"mapa_calor_{aba}")
 
 
 # ==========================================================

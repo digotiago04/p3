@@ -197,8 +197,9 @@ def tabela_resumo_com_detalhes(
     """
     Usada apenas em EVENTOS e DETERMINAÇÕES/ORIENTAÇÕES.
     - Mostra tabela resumo.
-    - Ao clicar/selecionar uma linha, abre uma janela modal com X para fechar.
-    - As colunas longas aparecem completas dentro da janela.
+    - Ao clicar/selecionar uma linha, abre uma janela modal.
+    - Dentro da janela há o botão FECHAR DETALHES, que limpa a seleção.
+    - O X da janela continua funcionando, mas o botão é o fechamento recomendado.
     """
     if df is None or df.empty:
         st.info("Sem registros neste mês.")
@@ -212,6 +213,13 @@ def tabela_resumo_com_detalhes(
         df_resumo = df_show.copy()
     else:
         df_resumo = df_show[cols_resumo].copy()
+
+    # Contador usado para mudar a key da tabela e limpar a seleção.
+    reset_key = f"{key_prefix}_reset_counter"
+    if reset_key not in st.session_state:
+        st.session_state[reset_key] = 0
+
+    table_key = f"{key_prefix}_tbl_modal_{st.session_state[reset_key]}"
 
     use_styler = False
     if highlight_mask is not None:
@@ -236,7 +244,7 @@ def tabela_resumo_com_detalhes(
             hide_index=True,
             on_select="rerun",
             selection_mode="single-row",
-            key=f"{key_prefix}_tbl_modal",
+            key=table_key,
         )
 
         rows = getattr(getattr(state, "selection", None), "rows", None)
@@ -268,24 +276,29 @@ def tabela_resumo_com_detalhes(
 
         if not cols_detalhe:
             st.info("Não há colunas de detalhe configuradas para este registro.")
-            return
+        else:
+            for c in cols_detalhe:
+                val = row[c] if c in row.index else ""
+                txt = "" if pd.isna(val) else str(val)
 
-        for c in cols_detalhe:
-            val = row[c] if c in row.index else ""
-            txt = "" if pd.isna(val) else str(val)
+                st.markdown(f"**{c}:**")
+                if len(txt) > 120:
+                    st.text_area(
+                        label=c,
+                        value=txt,
+                        height=180 if len(txt) < 400 else 260,
+                        key=f"{key_prefix}_modal_{c}_{sel}_{st.session_state[reset_key]}",
+                        label_visibility="collapsed",
+                        disabled=True,
+                    )
+                else:
+                    st.write(txt if txt.strip() else "—")
 
-            st.markdown(f"**{c}:**")
-            if len(txt) > 120:
-                st.text_area(
-                    label=c,
-                    value=txt,
-                    height=180 if len(txt) < 400 else 260,
-                    key=f"{key_prefix}_modal_{c}_{sel}",
-                    label_visibility="collapsed",
-                    disabled=True,
-                )
-            else:
-                st.write(txt if txt.strip() else "—")
+        st.markdown("---")
+
+        if st.button("FECHAR DETALHES", use_container_width=True, key=f"{key_prefix}_fechar_{sel}_{st.session_state[reset_key]}"):
+            st.session_state[reset_key] += 1
+            st.rerun()
 
     _janela_detalhes()
 

@@ -195,11 +195,10 @@ def tabela_resumo_com_detalhes(
     highlight_mask: pd.Series | None = None
 ):
     """
-    - Mostra tabela resumo (colunas curtas)
-    - Preferência: seleção por clique na linha (sem selectbox)
-    - Fallback: selectbox (caso Streamlit não suporte seleção)
-    - Mostra colunas longas completas em text_area (sem cortar)
-    - highlight_mask: True pinta a linha na tabela resumo (azul claro)
+    Usada apenas em EVENTOS e DETERMINAÇÕES/ORIENTAÇÕES.
+    - Mostra tabela resumo.
+    - Ao clicar/selecionar uma linha, abre uma janela modal com X para fechar.
+    - As colunas longas aparecem completas dentro da janela.
     """
     if df is None or df.empty:
         st.info("Sem registros neste mês.")
@@ -209,10 +208,11 @@ def tabela_resumo_com_detalhes(
     cols_resumo = resolve_cols(df_show, cols_resumo_canon)
     cols_detalhe = resolve_cols(df_show, cols_detalhe_canon)
 
-    # Monta tabela resumo
-    df_resumo = df_show[cols_resumo].copy() if cols_resumo else df_show.copy()
+    if not cols_resumo:
+        df_resumo = df_show.copy()
+    else:
+        df_resumo = df_show[cols_resumo].copy()
 
-    # Aplica highlight (PRIORIDADE etc.)
     use_styler = False
     if highlight_mask is not None:
         hm = highlight_mask.reset_index(drop=True)
@@ -226,10 +226,8 @@ def tabela_resumo_com_detalhes(
         styler = styler.apply(_style_row, axis=1)
         use_styler = True
 
-    # ============================
-    # TENTAR SELEÇÃO POR CLIQUE
-    # ============================
-    sel = None
+    st.caption("Clique em uma linha para abrir os detalhes.")
+
     try:
         state = st.dataframe(
             styler if use_styler else df_resumo,
@@ -238,47 +236,58 @@ def tabela_resumo_com_detalhes(
             hide_index=True,
             on_select="rerun",
             selection_mode="single-row",
-            key=f"{key_prefix}_tbl",
+            key=f"{key_prefix}_tbl_modal",
         )
+
         rows = getattr(getattr(state, "selection", None), "rows", None)
-        if rows:
-            sel = int(rows[0])
+        sel = int(rows[0]) if rows else None
+
     except TypeError:
-        # Streamlit antigo (não aceita on_select/selection_mode)
         st.dataframe(
             styler if use_styler else df_resumo,
             use_container_width=True,
             height=altura_df(len(df_resumo), max_h=420),
             hide_index=True,
         )
+        st.info("Atualize o Streamlit para usar a janela de detalhes por clique na linha.")
+        return
 
-    # ============================
-    # FALLBACK: SELECTBOX
-    # ============================
     if sel is None:
-        st.caption("Clique em uma linha (se disponível) ou selecione abaixo para ver detalhes.")
-        sel = st.selectbox(
-            "Ver detalhes do registro:",
-            options=list(df_show.index),
-            format_func=lambda i: label_func(df_show, i),
-            key=f"{key_prefix}_sel",
-        )
+        return
 
-    # ============================
-    # DETALHES (TEXTO COMPLETO)
-    # ============================
-    if cols_detalhe:
-        st.markdown("**DETALHES (texto completo)**")
+    @st.dialog("Detalhes do registro")
+    def _janela_detalhes():
+        row = df_show.iloc[sel]
+
+        try:
+            st.markdown(f"**Registro:** {label_func(df_show, sel)}")
+        except Exception:
+            st.markdown(f"**Registro:** {sel + 1}")
+
+        st.markdown("---")
+
+        if not cols_detalhe:
+            st.info("Não há colunas de detalhe configuradas para este registro.")
+            return
+
         for c in cols_detalhe:
-            val = df_show.at[sel, c]
+            val = row[c] if c in row.index else ""
             txt = "" if pd.isna(val) else str(val)
-            st.text_area(
-                c,
-                value=txt,
-                height=160 if len(txt) < 250 else 240,
-                key=f"{key_prefix}_{c}_{sel}",
-            )
 
+            st.markdown(f"**{c}:**")
+            if len(txt) > 120:
+                st.text_area(
+                    label=c,
+                    value=txt,
+                    height=180 if len(txt) < 400 else 260,
+                    key=f"{key_prefix}_modal_{c}_{sel}",
+                    label_visibility="collapsed",
+                    disabled=True,
+                )
+            else:
+                st.write(txt if txt.strip() else "—")
+
+    _janela_detalhes()
 
 
 # ==========================================================

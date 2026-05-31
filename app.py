@@ -845,7 +845,21 @@ def _montar_comparativo_auto(df_base: pd.DataFrame, mes_idx: int | None = None) 
 
     registros = []
     for _, row in df.iterrows():
-        oc = str(row["OCORRÊNCIAS"]).strip()
+        oc_raw = row.get("OCORRÊNCIAS", "")
+        if pd.isna(oc_raw):
+            continue
+
+        oc = str(oc_raw).strip()
+        oc_norm = _norm_ocorrencia(oc)
+
+        # Remove linhas vazias, cabeçalhos internos e restos de formatação da planilha.
+        if oc_norm in {"", "NAN", "NONE", "OCORRENCIAS", "OCORRÊNCIAS"}:
+            continue
+
+        # Remove drogas individualizadas também nesta etapa, para garantir.
+        if not _ocorrencia_visivel_no_comparativo(oc):
+            continue
+
         v25 = _to_num_br(row.iloc[col_2025_idx])
         v26 = _to_num_br(row.iloc[col_2026_idx])
 
@@ -857,7 +871,19 @@ def _montar_comparativo_auto(df_base: pd.DataFrame, mes_idx: int | None = None) 
             "STATUS": _status_comparativo(oc, v25, v26),
         })
 
-    return pd.DataFrame(registros)
+    df_saida = pd.DataFrame(registros)
+
+    if not df_saida.empty:
+        oc_limpa = df_saida["OCORRÊNCIAS"].astype(str).str.strip().str.upper()
+        df_saida = df_saida[
+            oc_limpa.ne("") &
+            oc_limpa.ne("NAN") &
+            oc_limpa.ne("NONE") &
+            oc_limpa.ne("OCORRÊNCIAS") &
+            oc_limpa.ne("OCORRENCIAS")
+        ].copy()
+
+    return df_saida.reset_index(drop=True)
 
 
 def _exibir_tabela_comparativo(df_comp: pd.DataFrame):

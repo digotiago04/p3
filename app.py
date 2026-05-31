@@ -695,49 +695,177 @@ def detalhamento_por_mes_padrao(dfs, aba: str):
 # ==========================================================
 # GRUPO
 # ==========================================================
-def detalhamento_grupo(dfs):
-    if ABA_GRUPO not in dfs:
-        st.error("Aba 'GRUPO' não encontrada.")
+def _norm_ocorrencia(s: str) -> str:
+    return _remove_acentos_upper(str(s)).strip()
+
+
+def _to_num_br(x):
+    """
+    Converte números da planilha para float, aceitando vírgula decimal.
+    """
+    if pd.isna(x):
+        return 0.0
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip()
+    if s == "":
+        return 0.0
+    s = s.replace(".", "").replace(",", ".") if "," in s else s
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _format_num_br(x):
+    """
+    Formata números mantendo inteiros sem casas e decimais com vírgula.
+    """
+    try:
+        v = float(x)
+    except Exception:
+        return ""
+    if abs(v - round(v)) < 1e-9:
+        return f"{int(round(v))}"
+    return f"{v:.2f}".replace(".", ",")
+
+
+def _format_pct_calc(v2025, v2026):
+    """
+    Calcula a variação percentual: ((2026 - 2025) / 2025) * 100.
+    Se 2025 = 0 e 2026 > 0, retorna '—' para evitar divisão por zero.
+    """
+    v2025 = float(v2025)
+    v2026 = float(v2026)
+    if abs(v2025) < 1e-12:
+        if abs(v2026) < 1e-12:
+            return "0,00%"
+        return "—"
+    pct = ((v2026 - v2025) / v2025) * 100
+    return f"{pct:.2f}%".replace(".", ",")
+
+
+def _status_comparativo(ocorrencia: str, v2025, v2026) -> str:
+    """
+    Define POSITIVO, NEGATIVO ou ESTÁVEL conforme a natureza da ocorrência.
+    Para alguns indicadores, aumentar em 2026 é positivo; para outros, é negativo.
+    """
+    oc = _norm_ocorrencia(ocorrencia)
+
+    aumento_negativo = {
+        "CVLI",
+        "TENT. DE HOMICIDIO",
+        "CVP GERAL",
+        "VEIC. ROUBADOS",
+        "PERTURBACAO",
+        "VIOLENCIA CONTRA A MULHER",
+    }
+
+    aumento_positivo = {
+        "VEIC. RECUPERADOS",
+        "ARMAS",
+        "PRISOES",
+        "VISITAS",
+        "TCO",
+        "TOTAL DROGAS (G)",
+        "OCORRENCIAS A. DROGAS",
+    }
+
+    v2025 = float(v2025)
+    v2026 = float(v2026)
+
+    if abs(v2026 - v2025) < 1e-12:
+        return "ESTÁVEL"
+
+    if oc in aumento_negativo:
+        return "POSITIVO" if v2026 < v2025 else "NEGATIVO"
+
+    if oc in aumento_positivo:
+        return "POSITIVO" if v2026 > v2025 else "NEGATIVO"
+
+    return "ESTÁVEL"
+
+
+def _ocorrencia_visivel_no_comparativo(ocorrencia: str) -> bool:
+    """
+    Oculta drogas individualizadas e mantém apenas TOTAL DROGAS (g)
+    e OCORRÊNCIAS A. DROGAS.
+    """
+    oc = _norm_ocorrencia(ocorrencia)
+    ocultar = {
+        "AP. MACONHA (G)",
+        "AP. CRACK (G)",
+        "AP. COCAINA (G)",
+        "OUTRAS DROGAS (G)",
+    }
+    return oc not in ocultar
+
+
+def _montar_comparativo_auto(df_base: pd.DataFrame, mes_idx: int | None = None) -> pd.DataFrame:
+    """
+    Monta o comparativo 2025 x 2026 a partir da aba 1ª CPM-I.
+
+    mes_idx:
+      - 0 a 11: meses de janeiro a dezembro
+      - None: usa o total anual
+    """
+    df = df_base.copy().dropna(axis=1, how="all").dropna(how="all")
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+
+    if "OCORRÊNCIAS" not in df.columns:
+        return pd.DataFrame(columns=["OCORRÊNCIAS", "2025", "2026", "PORCENTAGEM", "STATUS"])
+
+    # Remove linha de cabeçalho interno 2025/2026, caso ela tenha entrado como dado.
+    oc_series = df["OCORRÊNCIAS"].astype(str).str.strip()
+    df = df[
+        oc_series.ne("") &
+        oc_series.str.upper().ne("NAN") &
+        oc_series.str.upper().ne("NONE") &
+        oc_series.str.upper().ne("OCORRÊNCIAS")
+    ].copy()
+
+    # Remove drogas individualizadas
+    df = df[df["OCORRÊNCIAS"].apply(_ocorrencia_visivel_no_comparativo)].copy()
+
+    # Índices de colunas:
+    # 1/2: JANEIRO 2025/2026; 3/4: FEVEREIRO 2025/2026; ...; 25/26: TOTAL 2025/2026
+    if mes_idx is None:
+        col_2025_idx = 1 + 2 * 12
+        col_2026_idx = 2 + 2 * 12
+        col_2025_name = "2025"
+        col_2026_name = "2026"
+    else:
+        col_2025_idx = 1 + 2 * mes_idx
+        col_2026_idx = 2 + 2 * mes_idx
+        col_2025_name = "2025"
+        col_2026_name = "2026"
+
+    if col_2026_idx >= len(df.columns):
+        return pd.DataFrame(columns=["OCORRÊNCIAS", "2025", "2026", "PORCENTAGEM", "STATUS"])
+
+    registros = []
+    for _, row in df.iterrows():
+        oc = str(row["OCORRÊNCIAS"]).strip()
+        v25 = _to_num_br(row.iloc[col_2025_idx])
+        v26 = _to_num_br(row.iloc[col_2026_idx])
+
+        registros.append({
+            "OCORRÊNCIAS": oc,
+            col_2025_name: _format_num_br(v25),
+            col_2026_name: _format_num_br(v26),
+            "PORCENTAGEM": _format_pct_calc(v25, v26),
+            "STATUS": _status_comparativo(oc, v25, v26),
+        })
+
+    return pd.DataFrame(registros)
+
+
+def _exibir_tabela_comparativo(df_comp: pd.DataFrame):
+    if df_comp.empty:
+        st.info("Sem dados para exibir.")
         return
 
-    df = dfs[ABA_GRUPO].copy().dropna(axis=1, how="all").dropna(how="all")
-    df.columns = [str(c).strip().upper() for c in df.columns]
-
-    header_row_idx = None
-    for i in range(min(6, len(df))):
-        row = df.iloc[i].tolist()
-        row_str = [("" if pd.isna(x) else str(x).strip()) for x in row]
-        row_up = [s.upper() for s in row_str if s != ""]
-        has_pct = any("PORCENT" in s for s in row_up)
-        has_status = any(s == "STATUS" for s in row_up)
-        has_months = sum(_has_month_year_token(s) for s in row_str) >= 1
-        if has_pct or has_status or has_months:
-            header_row_idx = i
-            break
-
-    if header_row_idx is not None:
-        header_vals = df.iloc[header_row_idx].tolist()
-        new_cols = list(df.columns)
-        for j, col in enumerate(new_cols):
-            hv = header_vals[j] if j < len(header_vals) else None
-            hv_str = "" if pd.isna(hv) else str(hv).strip().upper()
-            col_up = str(col).strip().upper()
-            if (col_up in ("PERÍODO", "PERIODO") or _is_unnamed(col_up)) and hv_str not in ("", "NONE"):
-                new_cols[j] = hv_str
-        df.columns = new_cols
-        df = df.iloc[header_row_idx + 1:].copy()
-
-    if "OCORRÊNCIAS" in df.columns:
-        oc = df["OCORRÊNCIAS"].astype(str).str.strip()
-        df = df[oc.ne("") & oc.str.upper().ne("NONE") & oc.str.upper().ne("OCORRÊNCIAS")]
-
-    df = df.loc[:, [c for c in df.columns if not _is_unnamed(c)]].copy()
-
-    col_pct = next((c for c in df.columns if "PORCENT" in str(c).upper() or "PERCENT" in str(c).upper()), None)
-    if col_pct is not None:
-        df[col_pct] = df[col_pct].apply(_format_percent_br_from_any)
-
-    status_col = next((c for c in df.columns if str(c).strip().upper() == "STATUS"), None)
+    status_col = "STATUS"
 
     def _style_status(v):
         s = str(v).strip().upper()
@@ -749,11 +877,49 @@ def detalhamento_grupo(dfs):
             return "background-color:#FFAB00; color:#000000; font-weight:700;"
         return "color:#000000; font-weight:700;"
 
-    styler = df.style.set_properties(**{"text-align": "center"}).hide(axis="index")
-    if status_col is not None:
-        styler = styler.map(_style_status, subset=[status_col])
+    styler = df_comp.style.set_properties(**{"text-align": "center"}).hide(axis="index")
+    styler = styler.map(_style_status, subset=[status_col])
 
-    st.dataframe(styler, use_container_width=True, height=altura_df(len(df), max_h=650), hide_index=True)
+    st.dataframe(
+        styler,
+        use_container_width=True,
+        height=altura_df(len(df_comp), max_h=650),
+        hide_index=True
+    )
+
+
+def detalhamento_grupo(dfs):
+    """
+    Comparativo automático 2025 x 2026.
+    Não depende mais da aba GRUPO. Os dados são coletados da aba 1ª CPM-I.
+    """
+    aba_base = "1ª CPM-I"
+
+    if aba_base not in dfs:
+        st.error("Aba '1ª CPM-I' não encontrada.")
+        return
+
+    df_base = dfs[aba_base]
+
+    nomes_tabs = [m.title() for m in MESES] + ["Anual"]
+    tabs = st.tabs(nomes_tabs)
+
+    for idx_mes, mes in enumerate(MESES):
+        with tabs[idx_mes]:
+            st.markdown(
+                f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes} — 2025 x 2026</div>",
+                unsafe_allow_html=True
+            )
+            df_comp = _montar_comparativo_auto(df_base, mes_idx=idx_mes)
+            _exibir_tabela_comparativo(df_comp)
+
+    with tabs[-1]:
+        st.markdown(
+            "<div class='center' style='font-weight:600;'>COMPARATIVO ANUAL — 2025 x 2026</div>",
+            unsafe_allow_html=True
+        )
+        df_comp = _montar_comparativo_auto(df_base, mes_idx=None)
+        _exibir_tabela_comparativo(df_comp)
 
 # ==========================================================
 # P3: DETERMINAÇÕES / EVENTOS / VISITAS
@@ -996,7 +1162,7 @@ def main():
     if "aba_dados" not in st.session_state:
         st.session_state["aba_dados"] = ABA_CVLI
 
-    mes_grupo = detectar_mes_grupo(dfs)
+    # Comparativo automático não depende mais da aba GRUPO
 
     bb1, bb2, bb3, bb4 = st.columns(4)
     with bb1:
@@ -1009,13 +1175,13 @@ def main():
         if st.button("CVP", use_container_width=True, key="dados_cvp_btn"):
             st.session_state["aba_dados"] = ABA_CVP
     with bb4:
-        if st.button(f"COMPARATIVO DE {mes_grupo}\n2025 x 2026", use_container_width=True, key="dados_grupo_btn"):
+        if st.button("COMPARATIVO\n2025 x 2026", use_container_width=True, key="dados_grupo_btn"):
             st.session_state["aba_dados"] = ABA_GRUPO
 
     st.write("")
     aba_sel = st.session_state["aba_dados"]
     if aba_sel == ABA_GRUPO:
-        st.markdown(f"<div class='center' style='font-weight:600;'>COMPARATIVO DE {mes_grupo} — 2025 x 2026</div>", unsafe_allow_html=True)
+        st.markdown("<div class='center' style='font-weight:600;'>COMPARATIVO 2025 x 2026</div>", unsafe_allow_html=True)
         detalhamento_grupo(dfs)
     else:
         st.markdown(f"<div class='center' style='font-weight:600;'>Detalhamento - {aba_sel}</div>", unsafe_allow_html=True)

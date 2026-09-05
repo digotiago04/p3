@@ -1210,7 +1210,6 @@ def main():
 
     st.markdown("<div class='center-title'>Seção de Planejamento e Instrução</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
-    st.caption(f"Versão: {APP_VERSION}")
 
     # ======================================================
     # PRIMEIRO: DETERMINAÇÕES E ORIENTAÇÕES

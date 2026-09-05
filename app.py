@@ -10,6 +10,10 @@ import folium
 from streamlit_folium import st_folium
 
 # ==========================================================
+# PROGRAMA REFEITO - correção robusta de datas e leitura da planilha
+# ==========================================================
+
+# ==========================================================
 # CONFIG
 # ==========================================================
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
@@ -92,6 +96,48 @@ def _limpar_data_series(s: pd.Series) -> pd.Series:
     su = s.str.upper()
     invalid = su.isin(["", "NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN"])
     return s.mask(invalid, None)
+
+
+def converter_data_br(valor):
+    """
+    Converte datas vindas do Google Sheets/Excel sem inverter dia e mês.
+
+    Trata corretamente:
+    - datas reais do Excel/Google Sheets;
+    - texto no formato brasileiro dd/mm/aaaa;
+    - texto ISO aaaa-mm-dd;
+    - texto ISO com hora aaaa-mm-dd hh:mm:ss;
+    - valores vazios ou inválidos.
+
+    Este helper evita o erro em que 05/09/2026 passa a aparecer como 09/05/2026.
+    """
+    if pd.isna(valor):
+        return pd.NaT
+
+    if isinstance(valor, (pd.Timestamp, datetime.datetime, datetime.date)):
+        return pd.to_datetime(valor, errors="coerce")
+
+    s = str(valor).strip()
+    if s == "" or s.upper() in ["NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN", "NONE"]:
+        return pd.NaT
+
+    # Texto brasileiro: 05/09/2026
+    dt = pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
+    if pd.notna(dt):
+        return dt
+
+    # ISO: 2026-09-05
+    dt = pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+    if pd.notna(dt):
+        return dt
+
+    # ISO com hora: 2026-09-05 00:00:00
+    dt = pd.to_datetime(s, format="%Y-%m-%d %H:%M:%S", errors="coerce")
+    if pd.notna(dt):
+        return dt
+
+    # Última tentativa: ainda prioriza dia/mês quando for texto ambíguo.
+    return pd.to_datetime(s, errors="coerce", dayfirst=True)
 
 def _format_percent_br_from_any(x):
     if pd.isna(x):
@@ -446,8 +492,7 @@ def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
 
     # Prepara datas para tabela e popup
     if "DATA" in df.columns:
-        s = _limpar_data_series(df["DATA"])
-        df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["DATA_DT"] = df["DATA"].apply(converter_data_br)
         df["MES_NUM"] = df["DATA_DT"].dt.month
         df["DATA"] = df["DATA_DT"].dt.strftime("%d/%m/%Y")
         df["DATA"] = df["DATA"].fillna("")
@@ -670,8 +715,7 @@ def detalhamento_por_mes_padrao(dfs, aba: str):
     colunas_presentes = [c for c in colunas_exibir if c in df.columns]
 
     if "DATA" in df.columns:
-        s = _limpar_data_series(df["DATA"])
-        df["DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+        df["DATA_DT"] = df["DATA"].apply(converter_data_br)
         df["MES_NUM"] = df["DATA_DT"].dt.month
     else:
         df["DATA_DT"] = pd.NaT
@@ -967,8 +1011,7 @@ def p3_determinacoes(dfs):
         st.dataframe(df.reset_index(drop=True), use_container_width=True, hide_index=True)
         return
 
-    s = _limpar_data_series(df[col_data])
-    df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+    df["_DATA_DT"] = df[col_data].apply(converter_data_br)
     df["_MES_NUM"] = df["_DATA_DT"].dt.month
 
     tabs = st.tabs([m.title() for m in MESES])
@@ -1012,8 +1055,7 @@ def p3_eventos(dfs):
         st.dataframe(df.reset_index(drop=True), use_container_width=True, hide_index=True)
         return
 
-    s = _limpar_data_series(df[col_data])
-    df["_DATA_DT"] = pd.to_datetime(s, errors="coerce", dayfirst=True)
+    df["_DATA_DT"] = df[col_data].apply(converter_data_br)
     df["_MES_NUM"] = df["_DATA_DT"].dt.month
 
     tabs = st.tabs([m.title() for m in MESES])

@@ -16,7 +16,7 @@ from streamlit_folium import st_folium
 # ==========================================================
 # CONFIG
 # ==========================================================
-APP_VERSION = "05/09/2026 - programa completo com datas e ordenação corrigidas"
+
 
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 

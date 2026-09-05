@@ -16,6 +16,8 @@ from streamlit_folium import st_folium
 # ==========================================================
 # CONFIG
 # ==========================================================
+APP_VERSION = "05/09/2026 - programa completo com datas e ordenação corrigidas"
+
 SHEET_ID = "1wZ4h2oiptatvfYddT8xIllGBRSEfCRy4WAenTTvUDoc"
 
 MESES = [
@@ -102,14 +104,13 @@ def converter_data_br(valor):
     """
     Converte datas vindas do Google Sheets/Excel sem inverter dia e mês.
 
-    Trata corretamente:
-    - datas reais do Excel/Google Sheets;
-    - texto no formato brasileiro dd/mm/aaaa;
-    - texto ISO aaaa-mm-dd;
-    - texto ISO com hora aaaa-mm-dd hh:mm:ss;
-    - valores vazios ou inválidos.
+    Prioridade:
+    1. Se o valor já veio como data real, mantém a data.
+    2. Se for número serial do Excel, converte como serial.
+    3. Se for texto com barra, força padrão brasileiro dd/mm/aaaa.
+    4. Se for texto ISO, usa padrão aaaa-mm-dd.
 
-    Este helper evita o erro em que 05/09/2026 passa a aparecer como 09/05/2026.
+    Evita o erro em que 05/09/2026 vira 09/05/2026.
     """
     if pd.isna(valor):
         return pd.NaT
@@ -117,26 +118,38 @@ def converter_data_br(valor):
     if isinstance(valor, (pd.Timestamp, datetime.datetime, datetime.date)):
         return pd.to_datetime(valor, errors="coerce")
 
+    # Possível número serial do Excel/Google Sheets.
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        try:
+            # Datas modernas em serial Excel ficam normalmente acima de 20000.
+            if 20000 <= float(valor) <= 80000:
+                return pd.to_datetime(float(valor), unit="D", origin="1899-12-30", errors="coerce")
+        except Exception:
+            pass
+
     s = str(valor).strip()
     if s == "" or s.upper() in ["NI", "N/I", "N\\I", "-", "NÃO INFORMADO", "NA", "NAN", "NONE"]:
         return pd.NaT
 
-    # Texto brasileiro: 05/09/2026
-    dt = pd.to_datetime(s, format="%d/%m/%Y", errors="coerce")
-    if pd.notna(dt):
-        return dt
+    # Remove horário textual residual se vier junto com data brasileira.
+    # Ex.: 05/09/2026 00:00:00
+    s_limpo = s.split()[0] if "/" in s else s
 
-    # ISO: 2026-09-05
-    dt = pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
-    if pd.notna(dt):
-        return dt
+    # Texto brasileiro com barras: 05/09/2026, 5/9/2026, 05/09/26.
+    if "/" in s_limpo:
+        for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+            dt = pd.to_datetime(s_limpo, format=fmt, errors="coerce")
+            if pd.notna(dt):
+                return dt
+        return pd.to_datetime(s_limpo, errors="coerce", dayfirst=True)
 
-    # ISO com hora: 2026-09-05 00:00:00
-    dt = pd.to_datetime(s, format="%Y-%m-%d %H:%M:%S", errors="coerce")
-    if pd.notna(dt):
-        return dt
+    # ISO: 2026-09-05 ou 2026-09-05 00:00:00.
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        dt = pd.to_datetime(s, format=fmt, errors="coerce")
+        if pd.notna(dt):
+            return dt
 
-    # Última tentativa: ainda prioriza dia/mês quando for texto ambíguo.
+    # Última tentativa, ainda priorizando padrão brasileiro.
     return pd.to_datetime(s, errors="coerce", dayfirst=True)
 
 def _format_percent_br_from_any(x):
@@ -525,6 +538,13 @@ def detalhamento_cvli_tentativa_com_mapa(dfs, aba: str):
                     st.info("Sem registros neste mês.")
                     continue
 
+                dfm = dfm.sort_values(
+                    by="DATA_DT",
+                    ascending=True,
+                    na_position="last",
+                    kind="mergesort"
+                ).copy()
+
                 df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
                 st.dataframe(
                     df_show,
@@ -731,6 +751,12 @@ def detalhamento_por_mes_padrao(dfs, aba: str):
             if dfm.empty:
                 st.info("Sem registros neste mês.")
                 continue
+            dfm = dfm.sort_values(
+                by="DATA_DT",
+                ascending=True,
+                na_position="last",
+                kind="mergesort"
+            ).copy()
             if "DATA" in colunas_presentes:
                 dfm["DATA"] = dfm["DATA_DT"].dt.strftime("%d/%m/%Y")
             df_show = dfm[colunas_presentes].copy().reset_index(drop=True)
@@ -1022,6 +1048,15 @@ def p3_determinacoes(dfs):
                 st.info("Sem registros neste mês.")
                 continue
 
+            # Ordena por data dentro do mês, mantendo a ordem original da planilha
+            # quando houver mais de um registro na mesma data.
+            dfm = dfm.sort_values(
+                by="_DATA_DT",
+                ascending=True,
+                na_position="last",
+                kind="mergesort"
+            ).copy()
+
             dfm[col_data] = dfm["_DATA_DT"].dt.strftime("%d/%m/%Y")
             dfm = dfm.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore").reset_index(drop=True)
 
@@ -1055,6 +1090,10 @@ def p3_eventos(dfs):
         st.dataframe(df.reset_index(drop=True), use_container_width=True, hide_index=True)
         return
 
+    # Guarda a ordem original para manter a organização da planilha entre registros da mesma data.
+    df["_ORDEM_ORIGINAL"] = range(len(df))
+
+    # Conversão robusta para evitar inversão mês/dia.
     df["_DATA_DT"] = df[col_data].apply(converter_data_br)
     df["_MES_NUM"] = df["_DATA_DT"].dt.month
 
@@ -1066,19 +1105,32 @@ def p3_eventos(dfs):
                 st.info("Sem registros neste mês.")
                 continue
 
-            # máscara prioridade
+            # Ordena por data real dentro do mês.
+            # A coluna _ORDEM_ORIGINAL preserva a ordem da planilha entre eventos da mesma data.
+            dfm = dfm.sort_values(
+                by=["_DATA_DT", "_ORDEM_ORIGINAL"],
+                ascending=[True, True],
+                na_position="last",
+                kind="mergesort"
+            ).copy()
+
+            # Máscara de prioridade depois da ordenação para acompanhar a linha correta.
             if col_pri and col_pri in dfm.columns:
                 mask = dfm[col_pri].fillna("").astype(str).str.strip().str.upper().eq("SIM")
             else:
-                mask = pd.Series([False]*len(dfm), index=dfm.index)
+                mask = pd.Series([False] * len(dfm), index=dfm.index)
 
-            # formata DATA
+            # Formata DATA para exibição no padrão brasileiro.
             dfm[col_data] = dfm["_DATA_DT"].dt.strftime("%d/%m/%Y")
+            dfm[col_data] = dfm[col_data].fillna("")
 
-            dfm_clean = dfm.drop(columns=["_DATA_DT", "_MES_NUM"], errors="ignore").reset_index(drop=True)
+            dfm_clean = dfm.drop(
+                columns=["_DATA_DT", "_MES_NUM", "_ORDEM_ORIGINAL"],
+                errors="ignore"
+            ).reset_index(drop=True)
             mask_reset = mask.reset_index(drop=True)
 
-            # remove PRIORIDADE (não exibir)
+            # Remove PRIORIDADE da exibição, mas mantém o destaque azul nas linhas prioritárias.
             if col_pri and col_pri in dfm_clean.columns:
                 dfm_clean = dfm_clean.drop(columns=[col_pri], errors="ignore")
 
@@ -1096,7 +1148,8 @@ def p3_eventos(dfs):
                 cols_resumo_canon=["DATA", "LOCAL", "CIDADE", "GUARNIÇÃO"],
                 cols_detalhe_canon=["HORÁRIO", "EVENTO", "LOCAL", "PROCEDIMENTO"],
                 label_func=_label,
-                key_prefix=f"p3_evt_{mes_idx}",
+                # Key nova para limpar qualquer estado antigo da tabela no navegador/Streamlit.
+                key_prefix=f"p3_evt_data_corrigida_v20260905_{mes_idx}",
                 highlight_mask=mask_reset
             )
 
@@ -1106,9 +1159,35 @@ def p3_visitas(dfs):
     if sh not in dfs or dfs[sh].empty:
         st.info(f"Sem dados na aba **{sh}**.")
         return
+
     dfv = dfs[sh].copy().dropna(axis=1, how="all").dropna(how="all")
+    dfv.columns = dfv.columns.astype(str).str.strip().str.upper()
     dfv = dfv.loc[:, [c for c in dfv.columns if not _is_unnamed(c)]].copy()
-    st.dataframe(dfv.reset_index(drop=True), use_container_width=True, height=altura_df(len(dfv), max_h=650), hide_index=True)
+
+    col_data = get_first_col(dfv, "DATA")
+
+    if col_data and col_data in dfv.columns:
+        dfv["_ORDEM_ORIGINAL"] = range(len(dfv))
+        dfv["_DATA_DT"] = dfv[col_data].apply(converter_data_br)
+
+        # Ordena apenas por DATA e preserva a ordem da planilha dentro da mesma data.
+        dfv = dfv.sort_values(
+            by=["_DATA_DT", "_ORDEM_ORIGINAL"],
+            ascending=[True, True],
+            na_position="last",
+            kind="mergesort"
+        ).copy()
+
+        dfv[col_data] = dfv["_DATA_DT"].dt.strftime("%d/%m/%Y")
+        dfv[col_data] = dfv[col_data].fillna("")
+        dfv = dfv.drop(columns=["_DATA_DT", "_ORDEM_ORIGINAL"], errors="ignore")
+
+    st.dataframe(
+        dfv.reset_index(drop=True),
+        use_container_width=True,
+        height=altura_df(len(dfv), max_h=650),
+        hide_index=True
+    )
 
 # ==========================================================
 # APP
@@ -1131,6 +1210,7 @@ def main():
 
     st.markdown("<div class='center-title'>Seção de Planejamento e Instrução</div>", unsafe_allow_html=True)
     st.markdown("<div class='center-sub'>*** 1ª CPM/I ***</div>", unsafe_allow_html=True)
+    st.caption(f"Versão: {APP_VERSION}")
 
     # ======================================================
     # PRIMEIRO: DETERMINAÇÕES E ORIENTAÇÕES
